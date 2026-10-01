@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.selects.*
 import java.io.IOException
 import java.security.SecureRandom
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 class AndroidVpnService : VpnService() {
@@ -52,7 +53,7 @@ class AndroidVpnService : VpnService() {
         return START_NOT_STICKY
     }
     private suspend fun connectionLoop() {
-        VpnRuntime.phase(VpnPhase.PREPARING, "Preparing VPN")
+        VpnRuntime.beginConnection()
         val profile = try { repo.load().also { it.validate() } } catch (_: Exception) {
             VpnRuntime.error("Save a valid VPN profile before connecting", "PROFILE"); return
         }
@@ -61,6 +62,7 @@ class AndroidVpnService : VpnService() {
         while (currentCoroutineContext().isActive) {
             val resources = AttemptResources(); attempt = resources
             var reachedConnected = false
+            val networkChanged = AtomicBoolean(false)
             try {
                 if (networks.network.value == null) VpnRuntime.phase(VpnPhase.RECONNECTING, "Waiting for Wi-Fi or mobile network")
                 val network = networks.network.filterNotNull().first()
@@ -68,16 +70,21 @@ class AndroidVpnService : VpnService() {
                     // This child closes blocking I/O at the START of cancellation.
                     launch(start = CoroutineStart.UNDISPATCHED) { try { awaitCancellation() } finally { resources.close() } }
                     launch {
-                        networks.network.collect { if (it != network) { resources.close(); throw IOException("Underlying network changed") } }
+                        networks.network.collect { if (it != network) {
+                            networkChanged.set(true); resources.close(); throw UnderlyingNetworkChangedException()
+                        } }
                     }
                     runSession(profile, network, resources) { reachedConnected = true; failures = 0 }
                 }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
-                val error = classify(e)
-                if (!profile.reconnect || !error.retry) { VpnRuntime.error(error.message, error.category, (e as? SoftEtherServerException)?.code); return }
+                val failure = if (networkChanged.get()) UnderlyingNetworkChangedException() else e
+                val errno = generateSequence<Throwable>(failure) { it.cause }.take(8)
+                    .filterIsInstance<android.system.ErrnoException>().firstOrNull()?.errno
+                val error = ConnectionFailures.classify(failure, VpnRuntime.status.value.phase, errno)
+                VpnRuntime.failure(error)
+                if (!profile.reconnect || !error.retry) { VpnRuntime.phase(VpnPhase.ERROR, error.message); return }
                 failures = if (reachedConnected) 1 else failures + 1
-                VpnRuntime.diagnostics.error(error.category, (e as? SoftEtherServerException)?.code)
                 VpnRuntime.phase(VpnPhase.RECONNECTING, "${error.message}. Reconnecting")
             } finally { resources.close(); if (attempt === resources) attempt = null }
             val backoff = minOf(30_000L, 1000L shl minOf(failures - 1, 5).coerceAtLeast(0))
@@ -116,7 +123,7 @@ class AndroidVpnService : VpnService() {
         launch {
             while (isActive) {
                 delay(1000); val start = writeStarted.get()
-                if (start != 0L && monotonic() - start > session.timeoutMs) { resources.close(); throw IOException("Tunnel write stalled") }
+                if (start != 0L && monotonic() - start > session.timeoutMs) { resources.close(); throw TunnelWriteStalledException() }
             }
         }
         VpnRuntime.phase(VpnPhase.DHCP, "Obtaining IP address from Virtual Hub")
@@ -185,22 +192,6 @@ class AndroidVpnService : VpnService() {
             .setContentText(message).setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true)
             .addAction(Notification.Action.Builder(null, "Disconnect", disconnect).build()).build()
     }
-    private data class Failure(val message: String, val category: String, val retry: Boolean)
-    private fun classify(e: Exception): Failure = when (e) {
-        is ProfileCredentialException -> Failure("Save a password again; secure credentials could not be read", "CREDENTIALS", false)
-        is javax.net.ssl.SSLException -> Failure("TLS validation failed. Verify the hostname, trusted CA, or explicit certificate pin", "TLS", false)
-        is SoftEtherServerException -> Failure(e.message ?: "SoftEther error", "SERVER", e.code in setOf(3, 10, 11, 13, 15, 16, 20))
-        is ProtocolException -> Failure(e.message ?: "SoftEther handshake error", "PROTOCOL", false)
-        is DhcpException -> Failure(e.message ?: "DHCP failed", "DHCP", true)
-        is TunEstablishException -> Failure("Android TUN could not be established; check VPN consent", "TUN", false)
-        is java.net.UnknownHostException -> Failure("Server DNS resolution failed", "DNS", true)
-        is java.net.ConnectException -> Failure("TCP connection failed", "TCP", true)
-        is java.net.SocketTimeoutException -> Failure("Tunnel timed out", "TIMEOUT", true)
-        is IOException -> Failure("Transport lost or underlying network changed", "TRANSPORT", true)
-        else -> Failure("VPN configuration failed; export sanitized diagnostics", "CONFIGURATION", false)
-    }
-    private class TunEstablishException : IOException()
-    private class ProfileCredentialException : IOException()
     companion object {
         const val CONNECT = "com.blockto.sevpn.CONNECT"; const val DISCONNECT = "com.blockto.sevpn.DISCONNECT"
         private const val CHANNEL = "sevpn_connection"; private const val NOTIFICATION = 1

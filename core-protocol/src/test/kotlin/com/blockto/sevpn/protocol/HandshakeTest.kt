@@ -61,4 +61,14 @@ class HandshakeTest {
             try { SoftEtherPackCodec.decode(bytes) } catch (_: ProtocolException) {}
         }
     }
+    @Test fun cleanupFailureDoesNotMaskTheHandshakeFailure() {
+        val transport = object : SoftEtherTransport {
+            override val input = ByteArrayInputStream(byteArrayOf())
+            override val output = ByteArrayOutputStream()
+            override fun setReadTimeout(milliseconds: Int) { }
+            override fun close() { throw IOException("synthetic cleanup failure") }
+        }
+        try { SoftEtherSession.connect(transport, "server", "hub", "user", charArrayOf(), ByteArray(20)); fail() }
+        catch (_: EOFException) { }
+    }
 }

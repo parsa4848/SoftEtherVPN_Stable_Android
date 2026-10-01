@@ -94,6 +94,9 @@ private fun VpnScreen(connect: () -> Unit, disconnect: () -> Unit, exportLog: ()
         Text("Native SoftEther VPN · IPv4", style = MaterialTheme.typography.bodyMedium)
         Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(status.message, style = MaterialTheme.typography.titleMedium, color = if (status.phase == VpnPhase.ERROR) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+            if (status.phase != VpnPhase.CONNECTED) status.lastFailure?.let { failure ->
+                Text("Last failure: ${failure.message}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
             if (status.phase == VpnPhase.CONNECTED) {
                 Text("Sent ${formatBytes(status.txBytes)} · Received ${formatBytes(status.rxBytes)} · ${elapsed / 60}m ${elapsed % 60}s")
             } else if (active) LinearProgressIndicator(Modifier.fillMaxWidth())

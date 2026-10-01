@@ -29,7 +29,7 @@ class PlatformTestRunner : Instrumentation() {
             }
             override fun testFinished(description: Description) { if (description !in failed) sendStatus(0, status(description)) }
         })
-        val result = junit.run(KeystoreTest::class.java, ExampleInstrumentedTest::class.java)
+        val result = junit.run(KeystoreTest::class.java, SocketInitializationTest::class.java, ExampleInstrumentedTest::class.java)
         finish(Activity.RESULT_OK, Bundle().apply { putString("stream", if (result.wasSuccessful()) "\nOK (${result.runCount} tests)\n" else "\nFAILURES!!! Tests run: ${result.runCount}, Failures: ${result.failureCount}\n") })
     }
     companion object { lateinit var appContext: Context; private set }

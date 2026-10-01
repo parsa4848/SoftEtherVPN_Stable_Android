@@ -10,20 +10,20 @@ Recorded during implementation on 2026-10-01.
 | Check | Observed result |
 |---|---|
 | Upstream C fixture generation | Actual extracted Stable hash/PACK functions compiled with clang and executed; 16 fixture entries generated |
-| Protocol unit tests | 15 passed: hash/authentication, PACK, bounded malformed/fuzz inputs, HTTP, welcome validation, Ethernet batching/keepalive |
+| Protocol unit tests | 16 passed: hash/authentication, PACK, bounded malformed/fuzz inputs, HTTP, welcome validation, Ethernet batching/keepalive, and preserving the original failure during cleanup |
 | IPv4/routing unit tests | 2 passed: masks, longest-prefix routes, packet/UDP bounds and checksums |
 | Ethernet/ARP unit tests | 3 passed: wire layout, cache bounds/expiry, ARP-dependent outgoing and returning IPv4 packet flow |
 | DHCP unit tests | 5 passed: options/overload, lease validation, DORA, renewal and malformed/fuzz inputs |
 | TLS unit/integration tests | 4 passed: pin parsing, actual loopback TLS with matching/wrong pin, untrusted certificate, trusted hostname and hostname mismatch |
-| App host unit tests | 5 passed: profile validation, bounded sanitized diagnostics, cancellation resource ownership/close races, and starter arithmetic test |
+| App host unit tests | 14 passed: profile validation, bounded sanitized diagnostics, cancellation resource ownership/close races, physical network selection/handover, specific safe failure classification, and starter arithmetic test |
 | Debug app assembly | `:app:assembleDebug` succeeded |
-| Device-test assembly | `:app:assembleDebugAndroidTest` succeeded, including actual Android Keystore test code |
+| Device-test assembly | `:app:assembleDebugAndroidTest` succeeded, including actual Android Keystore and socket descriptor regression test code |
 | Host integration runner | `:integration:installDist` succeeded |
 | APK signature verification | Android SDK `apksigner verify --verbose` succeeded, one signer, APK Signature Scheme v2 |
 | Packaged native dependencies | All packaged ELF PT_LOAD segments use 16 KiB alignment; `zipalign -c -P 16 -v 4` succeeded (device execution remains pending) |
 | License packaging | APK contains the notice plus full Apache 2.0 and AOSP BSD license texts |
 
-Total: **34 host tests, zero failures, zero errors, zero skipped**. Reports are
+Total: **44 host tests, zero failures, zero errors, zero skipped**. Reports are
 under each module's `build/test-results/` and `build/reports/tests/`.
 Scripted in-memory protocol/DHCP peers and a loopback TLS server test specific
 wire behavior. They are not stock SoftEther or Android end-to-end evidence.
@@ -35,6 +35,22 @@ The C fixture generator ran against Stable revision
 `src/Cedar/Protocol.c` is
 `e2cff892d23b56e1bc9e5981bb5080e774b9cf02d8c748fb0f2aea3fba5a1593`.
 
+## 0.1.1 transport fix
+
+The user tested 0.1.0 on Poco X6 Pro / Android 16 with SoftEther Stable
+4.41-9787-rtm on Windows Server 2019. Exported diagnostics showed repeated
+CONNECTING_TRANSPORT -> TRANSPORT errors, without reaching TLS and with no
+tunnel bytes. Android Socket/VpnService source confirms a concrete bug:
+new Socket() does not create its descriptor, and protect(Socket) reads that
+descriptor directly. Socket options were previously set after protect.
+
+0.1.1 creates the descriptor through TCP_NODELAY before protection, binding
+and connect. It also uses callback capability snapshots for stable physical
+network selection, records specific socket/OS failures and retains the last
+failure on screen during retry. All 44 host tests and both APK assemblies pass.
+The Android descriptor regression test is compiled but not executed here.
+Successful phone/server retest remains pending.
+
 ## Open checks
 
 **Android lint did not run.** AGP tried to resolve
@@ -45,7 +61,8 @@ no baseline was created, and successful compilation is not a substitute for
 lint. Re-run `:app:lintDebug` when this dependency is accessible.
 
 **Device instrumentation did not run.** `adb devices -l` listed no devices.
-The Android Keystore tests require the actual OS; they were compiled only.
+The Android Keystore and socket descriptor tests require the actual OS; they
+were compiled only.
 
 **Stock-server integration did not run.** The prepared Docker server is pinned
 to unmodified Stable source. Docker/Podman/WSL were unavailable on the build

@@ -29,7 +29,7 @@ class ResourceLifecycleTest {
         repeat(300) { log.phase(VpnPhase.CONNECTING_TRANSPORT) }
         log.error("SERVER", 9)
         val text = log.export()
-        assertTrue(text.lines().size <= 204)
+        assertTrue(text.lines().size <= 205)
         assertTrue(text.contains("server_code=9"))
         try { log.error("password=unsafe", null); fail() } catch (_: IllegalArgumentException) {}
     }

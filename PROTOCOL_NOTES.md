@@ -6,6 +6,12 @@ Protocol.c SHA-256:
 `e2cff892d23b56e1bc9e5981bb5080e774b9cf02d8c748fb0f2aea3fba5a1593`.
 [Pinned upstream source](https://github.com/SoftEtherVPN/SoftEtherVPN_Stable/tree/ed17437af9719ac66acab30faa29e375d613c35f).
 
+The reported phone test uses Stable 4.41 build 9787. Its tagged Protocol.c was
+also checked: ServerDownloadSignature accepts the same compact native token,
+and its login uses the same single-TCP negotiation fields. This source check
+does not establish a successful 4.41 server session.
+[4.41 source](https://github.com/SoftEtherVPN/SoftEtherVPN_Stable/blob/v4.41-9787-rtm/src/Cedar/Protocol.c).
+
 ## Complete path reviewed
 
 `vpncsvc.c:StartProcess` -> `CtStartClient` -> `CiConnect` in Client.c

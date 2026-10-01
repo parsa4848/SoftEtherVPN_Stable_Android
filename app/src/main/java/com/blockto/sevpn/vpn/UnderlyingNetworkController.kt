@@ -10,28 +10,33 @@ class UnderlyingNetworkController(context: Context) : Closeable {
     private val manager = context.getSystemService(ConnectivityManager::class.java)
     private val mutable = MutableStateFlow<Network?>(null)
     val network = mutable.asStateFlow()
-    private val candidates = linkedSetOf<Network>()
+    private val selection = PhysicalNetworkSelection<Network>()
+    private var closed = false
     private val callback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) { synchronized(candidates) { candidates += network; update() } }
-        override fun onLost(network: Network) { synchronized(candidates) { candidates -= network; update() } }
-        override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) { synchronized(candidates) { update() } }
+        // On API 26+, onAvailable is followed by ordered capability data.
+        // Publishing before that data arrives would create a spurious loss.
+        override fun onLost(network: Network) { synchronized(selection) {
+            if (!closed) mutable.value = selection.lost(network)
+        } }
+        override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) { synchronized(selection) {
+            if (!closed) mutable.value = selection.capabilities(network, PhysicalNetworkSelection.Capabilities(
+                internet = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET),
+                physical = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN),
+                validated = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
+                preference = when {
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> 20
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> 10
+                    else -> 0
+                }
+            ))
+        } }
     }
     init {
-        synchronized(candidates) {
-            candidates.addAll(manager.allNetworks.filter { isPhysical(it) }); update()
-        }
         manager.registerNetworkCallback(NetworkRequest.Builder().addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN).build(), callback)
     }
-    private fun isPhysical(network: Network) = manager.getNetworkCapabilities(network)?.let {
-        it.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) && it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-    } == true
-    private fun update() {
-        val active = manager.activeNetwork
-        mutable.value = if (active != null && active in candidates && isPhysical(active)) active
-        else candidates.filter { isPhysical(it) }.sortedByDescending {
-            manager.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
-        }.firstOrNull()
+    override fun close() {
+        synchronized(selection) { closed = true; mutable.value = null }
+        manager.unregisterNetworkCallback(callback)
     }
-    override fun close() { manager.unregisterNetworkCallback(callback); mutable.value = null }
 }

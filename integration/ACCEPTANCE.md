@@ -1,8 +1,11 @@
 # Required device acceptance
 
 Status: **pending**. No phone/emulator was connected to the build host. The
-user has an existing stock server and will install the generated APK on a
-phone. No remote server credentials were supplied to the implementation agent.
+user tested 0.1.0 on a Poco X6 Pro, Android 16, against Stable 4.41-9787-rtm
+on Windows Server 2019. Its diagnostics show repeated failures during
+CONNECTING_TRANSPORT, before TLS, with zero tunnel traffic. The 0.1.1 update
+fixes uninitialized socket protection and network callback races. Successful
+retest is pending. No remote server credentials were supplied to the agent.
 
 Record phone model/Android API, server Stable version/build, transport port,
 hub network mode and test date. Never record passwords, hashes or session keys.

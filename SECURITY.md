@@ -33,7 +33,8 @@ device transfer are excluded. Reinstall/key loss requires password re-entry.
 
 ## OS routing
 
-Every socket is protected before connect and explicitly bound to a non-VPN
+Every socket's descriptor is initialized before protection, without connecting
+or binding a local address. The socket is protected before connect and explicitly bound to a non-VPN
 underlying Network. Protection failure is a connection failure. DNS resolution
 of the transport hostname runs on that physical Network. This unavoidable
 server bootstrap resolution is distinct from application DNS, which uses DHCP
@@ -69,7 +70,8 @@ TUN uses cancellable poll intervals. Stalled tunnel writes have a watchdog.
 ## Diagnostics and release gate
 
 Diagnostics use an allowlisted category interface, retain at most 200 events
-and export only phases, error codes and counters. No sensitive payload dump,
+and export only app version, phases, failure/operation enums, numeric OS/server
+error codes and counters. Raw exception text is never exported. No sensitive payload dump,
 credentials, hashes, TLS certificates/keys or session keys are emitted.
 Debug APKs must be kept separate from signed production distribution.
 

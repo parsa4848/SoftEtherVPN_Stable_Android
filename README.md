@@ -30,10 +30,10 @@ $env:JAVA_HOME = 'C:\Program Files\Android\Android Studio\jbr'
 On macOS/Linux, configure a suitable JDK and SDK (`ANDROID_HOME` or
 `local.properties`), then use `./gradlew` with the same tasks. Debug output:
 `app/build/outputs/apk/debug/app-debug.apk`; packaged phone test artifact:
-`dist/SEVPN-0.1.0-debug.apk` plus `dist/SHA256SUMS.txt`.
+`dist/SEVPN-0.1.1-debug.apk` plus `dist/SHA256SUMS.txt`.
 
 ```powershell
-adb install -r .\dist\SEVPN-0.1.0-debug.apk
+adb install -r .\dist\SEVPN-0.1.1-debug.apk
 ```
 
 Without USB debugging, transfer the APK to your phone and allow installation
@@ -100,7 +100,8 @@ Device-only tests use platform Instrumentation plus JUnit4:
 .\gradlew.bat :app:connectedDebugAndroidTest
 ```
 
-These exercise actual Android Keystore encryption, random IVs and profile AAD.
+These exercise actual Android Keystore encryption, random IVs, profile AAD
+and Android socket descriptor creation before VPN protection.
 They require a connected phone/emulator and have not been substituted with
 JVM Android mocks. [Integration instructions](integration/README.md) include
 a pinned, unmodified Stable Docker server and real IPv4 DNS/TCP probes.
@@ -108,8 +109,9 @@ a pinned, unmodified Stable Docker server and real IPv4 DNS/TCP probes.
 ## Diagnostics and limits
 
 Export sanitized diagnostics from the main screen after a failure. Export
-contains local phase names, error categories, numeric server errors and byte
-counters. It excludes passwords, hashes, keys and packet contents. Screenshots
+contains the app version, local phase names, failure/operation enums, numeric
+OS/server errors and byte counters. It excludes raw exception text, passwords,
+hashes, keys and packet contents. The last failure stays visible during retries. Screenshots
 are intentionally blocked, so use diagnostic export when reporting a failure.
 
 Initial version: IPv4 full tunnel, one protected TCP/TLS connection, password

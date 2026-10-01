@@ -133,7 +133,7 @@ class SoftEtherSession private constructor(
                 if (timeout !in 5000..60000) throw ProtocolException("Invalid session timeout")
                 transport.setReadTimeout(timeout)
                 return SoftEtherSession(transport, name, timeout, key.copyOf(), welcome.int("session_key_32"))
-            } catch (e: Throwable) { transport.close(); throw e }
+            } catch (e: Throwable) { runCatching { transport.close() }; throw e }
             finally { hello?.wipe(); login?.wipe(); welcome?.wipe() }
         }
         private fun checkError(p: Pack) { val code = p.int("error"); if (code != 0L) throw SoftEtherServerException(code.toInt()) }

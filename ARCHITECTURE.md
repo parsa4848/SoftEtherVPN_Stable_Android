@@ -58,7 +58,10 @@ framing -> TLS -> stock hub. Inbound: TLS -> bounded native framing ->
 Ethernet destination/type validation -> ARP/DHCP consumed internally, or
 validated IPv4 addressed to the leased endpoint -> TUN write.
 
-Protect and bind the physical socket before connect. Authenticate before
+Initialize the socket descriptor without connecting (TCP_NODELAY creates the
+Android SocketImpl), then protect and bind the physical socket before connect.
+Android's protect(Socket) reads the descriptor directly and does not create it.
+Authenticate before
 starting DHCP. A secure-random locally administered MAC is persisted per
 profile. DHCP runs entirely over L2 while no TUN exists. Validate ACK address,
 contiguous mask, gateway/routes, DNS and lease before establishing TUN with
@@ -76,6 +79,10 @@ is published only after authenticated session, DHCP, TUN and forwarding jobs.
 An explicit phase enum is exposed as StateFlow. A single controller job owns
 attempts, closes the transport on underlying Network loss/change and retries
 transient failures using capped exponential backoff plus secure-random jitter.
+The network monitor uses ordered onCapabilitiesChanged snapshots; it does
+not re-query ConnectivityManager inside callbacks or change its physical
+selection merely because the VPN becomes the default network. Equal-priority
+candidates preserve the existing selection; validated networks are preferred.
 User disconnect/revocation cancels that job immediately. Each new attempt
 gets a fresh session, DHCP and ARP cache. DHCP leases are renewed; expiry or
 configuration changes cause controlled session/TUN replacement.

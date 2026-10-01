@@ -7,12 +7,15 @@ import kotlinx.coroutines.flow.update
 enum class VpnPhase { IDLE, PREPARING, CONNECTING_TRANSPORT, TLS_HANDSHAKE, SOFTETHER_HANDSHAKE,
     AUTHENTICATING, SESSION_ESTABLISHED, DHCP, CONFIGURING_TUN, CONNECTED, RECONNECTING, DISCONNECTING, ERROR }
 data class VpnStatus(val phase: VpnPhase = VpnPhase.IDLE, val message: String = "Disconnected",
-                     val txBytes: Long = 0, val rxBytes: Long = 0, val connectedAtMs: Long = 0)
+                     val txBytes: Long = 0, val rxBytes: Long = 0, val connectedAtMs: Long = 0,
+                     val lastFailure: ConnectionFailure? = null)
 
 object VpnRuntime {
     private val mutable = MutableStateFlow(VpnStatus())
     val status = mutable.asStateFlow()
     val diagnostics = DiagnosticLog()
+    fun beginConnection() { mutable.value = VpnStatus(phase = VpnPhase.PREPARING, message = "Preparing VPN"); diagnostics.phase(VpnPhase.PREPARING) }
+    fun failure(failure: ConnectionFailure) { mutable.update { it.copy(lastFailure = failure) }; diagnostics.failure(failure) }
     fun phase(phase: VpnPhase, message: String = phase.name.lowercase().replace('_', ' ')) {
         mutable.update { it.copy(phase = phase, message = message,
             connectedAtMs = if (phase == VpnPhase.CONNECTED) System.currentTimeMillis() else 0) }
@@ -26,7 +29,11 @@ class DiagnosticLog {
     private val lines = ArrayDeque<String>()
     @Synchronized fun phase(phase: VpnPhase) = append("phase=${phase.name}")
     @Synchronized fun error(category: String, code: Int?) { require(category.matches(Regex("[A-Z_]+"))); append("error=$category server_code=${code ?: 0}") }
+    @Synchronized fun failure(failure: ConnectionFailure) {
+        require(failure.category.matches(Regex("[A-Z_]+")))
+        append("error=${failure.category} stage=${failure.phase.name} cause=${failure.kind.name} operation=${failure.step?.name ?: "NONE"} errno=${failure.errno ?: 0} server_code=${failure.serverCode ?: 0}")
+    }
     private fun append(line: String) { if (lines.size >= 200) lines.removeFirst(); lines.addLast("${java.time.Instant.now()} $line") }
-    @Synchronized fun export(): String = "SEVPN sanitized diagnostics v1\n" + lines.joinToString("\n") + "\n" +
+    @Synchronized fun export(): String = "SEVPN sanitized diagnostics v2\napp_version=${com.blockto.sevpn.BuildConfig.VERSION_NAME}\n" + lines.joinToString("\n") + "\n" +
         VpnRuntime.status.value.let { "tx_bytes=${it.txBytes} rx_bytes=${it.rxBytes}\n" }
 }
