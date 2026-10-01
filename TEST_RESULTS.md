@@ -22,6 +22,7 @@ Recorded during implementation on 2026-10-01.
 | APK signature verification | Android SDK `apksigner verify --verbose` succeeded, one signer, APK Signature Scheme v2 |
 | Packaged native dependencies | All packaged ELF PT_LOAD segments use 16 KiB alignment; `zipalign -c -P 16 -v 4` succeeded (device execution remains pending) |
 | License packaging | APK contains the notice plus full Apache 2.0 and AOSP BSD license texts |
+| Windows certificate fingerprint helper | PEM and DER exports produce identical SHA-256 pins, checked against independently hashed DER bytes |
 
 Total: **44 host tests, zero failures, zero errors, zero skipped**. Reports are
 under each module's `build/test-results/` and `build/reports/tests/`.
@@ -50,6 +51,11 @@ network selection, records specific socket/OS failures and retains the last
 failure on screen during retry. All 44 host tests and both APK assemblies pass.
 The Android descriptor regression test is compiled but not executed here.
 Successful phone/server retest remains pending.
+
+The user's 0.1.1 retest now reaches TLS, with the pin field empty. TLS rejected
+the server; the user tried both its hostname and IP address. This demonstrates
+progress past socket setup, not successful authentication. The next check is
+the authenticated server certificate export and its explicit SHA-256 pin.
 
 ## Open checks
 

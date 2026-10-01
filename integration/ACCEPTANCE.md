@@ -5,7 +5,9 @@ user tested 0.1.0 on a Poco X6 Pro, Android 16, against Stable 4.41-9787-rtm
 on Windows Server 2019. Its diagnostics show repeated failures during
 CONNECTING_TRANSPORT, before TLS, with zero tunnel traffic. The 0.1.1 update
 fixes uninitialized socket protection and network callback races. Successful
-retest is pending. No remote server credentials were supplied to the agent.
+retest is pending. The user's 0.1.1 retest reaches TLS but fails validation
+with an empty pin field. Server certificate pin configuration is the next
+step. No remote server credentials were supplied to the agent.
 
 Record phone model/Android API, server Stable version/build, transport port,
 hub network mode and test date. Never record passwords, hashes or session keys.

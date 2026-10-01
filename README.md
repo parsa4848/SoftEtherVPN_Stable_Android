@@ -70,6 +70,22 @@ To calculate a fingerprint from the administrator's certificate file:
 openssl x509 -in server.crt -noout -fingerprint -sha256
 ```
 
+On Windows, export the server's public X.509 certificate through SoftEther
+VPN Server Manager's Encryption/Network settings, then run:
+
+```powershell
+.\tools\get-certificate-pin.ps1 -CertificatePath 'C:\Temp\server.cer'
+```
+
+This prints the 64-digit SHA-256 fingerprint accepted by Advanced settings.
+It supports PEM and DER exports. Hashing a PEM file with Get-FileHash gives
+the file hash, which is different from the certificate fingerprint. Windows
+Certificate Details often shows a SHA-1 thumbprint; that is not the SHA-256
+value needed here. Obtain the exported certificate from your authenticated
+server administration session. Stock SoftEther creates a self-signed server
+certificate unless the administrator configures a different one.
+[SoftEther certificate administration](https://www.softether.org/4-docs/1-manual/3/3.3_VPN_Server_Administration).
+
 Passwords are encrypted with an Android Keystore AES-GCM key. The UI does not
 reload them as plaintext, excludes them from saved UI state and blocks
 screenshots. Leaving password blank keeps a stored password only for the same
