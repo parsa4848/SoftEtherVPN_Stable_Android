@@ -1,3 +1,6 @@
+import org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType
+import org.gradle.api.attributes.java.TargetJvmEnvironment
+
 plugins {
     alias(libs.plugins.android.application)
     id("org.jetbrains.kotlin.plugin.compose")
@@ -16,7 +19,7 @@ android {
         versionCode = 1
         versionName = "0.1.0"
 
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "com.blockto.sevpn.PlatformTestRunner"
     }
 
     buildTypes {
@@ -31,6 +34,16 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     buildFeatures { compose = true; buildConfig = true }
+}
+
+// AGP's lint jar discovery otherwise selects desktop/JVM stubs from these
+// older multiplatform AndroidX publications. Keep the Android variant for lint.
+configurations.matching { it.name.endsWith("LintChecksClasspath") }.configureEach {
+    attributes {
+        attribute(KotlinPlatformType.attribute, KotlinPlatformType.androidJvm)
+        attribute(TargetJvmEnvironment.TARGET_JVM_ENVIRONMENT_ATTRIBUTE,
+            objects.named(TargetJvmEnvironment::class.java, TargetJvmEnvironment.ANDROID))
+    }
 }
 
 dependencies {
@@ -48,7 +61,12 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.6")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    constraints {
+        listOf("lifecycle-common", "lifecycle-runtime", "lifecycle-runtime-ktx",
+            "lifecycle-viewmodel", "lifecycle-viewmodel-ktx", "lifecycle-viewmodel-savedstate")
+            .forEach { implementation("androidx.lifecycle:$it:2.8.6") }
+        implementation("androidx.annotation:annotation:1.8.1")
+    }
     testImplementation(libs.junit)
-    androidTestImplementation(libs.androidx.espresso.core)
-    androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.junit)
 }

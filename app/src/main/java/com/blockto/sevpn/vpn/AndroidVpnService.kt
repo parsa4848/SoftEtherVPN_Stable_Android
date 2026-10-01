@@ -167,6 +167,7 @@ class AndroidVpnService : VpnService() {
             }
         }
         readerReady.await(); writerReady.await(); bridgeReady.await()
+        currentCoroutineContext().ensureActive()
         connected(); VpnRuntime.phase(VpnPhase.CONNECTED, "Connected · ${lease.address}/${lease.prefix}")
         awaitCancellation()
     }

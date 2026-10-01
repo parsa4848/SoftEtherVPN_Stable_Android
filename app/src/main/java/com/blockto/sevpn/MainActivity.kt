@@ -19,6 +19,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.*
 import androidx.compose.ui.unit.dp
@@ -81,6 +82,9 @@ private fun VpnScreen(connect: () -> Unit, disconnect: () -> Unit, exportLog: ()
     val status by VpnRuntime.status.collectAsStateWithLifecycle()
     val active = status.phase !in setOf(VpnPhase.IDLE, VpnPhase.ERROR)
     var advanced by remember { mutableStateOf(false) }
+    var licenses by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+    val uiScope = rememberCoroutineScope()
     var elapsed by remember { mutableLongStateOf(0) }
     LaunchedEffect(status.connectedAtMs) {
         while (status.connectedAtMs != 0L) { elapsed = (System.currentTimeMillis() - status.connectedAtMs) / 1000; delay(1000) }
@@ -128,8 +132,12 @@ private fun VpnScreen(connect: () -> Unit, disconnect: () -> Unit, exportLog: ()
             Text("Full IPv4 tunnel over TCP/TLS. IPv6 is blocked while connected. This version has no kill switch during reconnect and does not support UDP acceleration or cluster redirects.", style = MaterialTheme.typography.bodySmall)
         }
         TextButton(onClick = exportLog) { Text("Export sanitized diagnostics") }
+        TextButton(onClick = { uiScope.launch { licenses = withContext(Dispatchers.IO) { context.assets.open("third_party_notices.md").bufferedReader().use { it.readText() } } } }) { Text("Open-source licenses") }
         Text("Requires DHCP and an Internet gateway on the Virtual Hub. SecureNAT is one option.", style = MaterialTheme.typography.bodySmall)
     }
+    licenses?.let { content -> AlertDialog(onDismissRequest = { licenses = null }, title = { Text("Open-source licenses") },
+        text = { Text(content, Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) },
+        confirmButton = { TextButton(onClick = { licenses = null }) { Text("Close") } }) }
 }
 
 @Composable private fun Field(label: String, value: String, enabled: Boolean, keyboard: KeyboardType = KeyboardType.Text, change: (String) -> Unit) {

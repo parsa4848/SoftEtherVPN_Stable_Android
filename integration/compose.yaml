@@ -1,0 +1,8 @@
+services:
+  stable:
+    build: .
+    platform: linux/amd64
+    ports:
+      - "127.0.0.1:5555:5555"
+    volumes:
+      - ./.local:/test-artifacts

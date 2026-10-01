@@ -9,12 +9,16 @@ import java.util.Locale
 interface SoftEtherTransport : Closeable {
     val input: InputStream
     val output: OutputStream
+    val localAddress: java.net.InetSocketAddress? get() = null
+    val remoteAddress: java.net.InetSocketAddress? get() = null
     fun setReadTimeout(milliseconds: Int)
 }
 
 class SocketTransport(private val socket: Socket) : SoftEtherTransport {
     override val input = BufferedInputStream(socket.getInputStream(), 32 * 1024)
     override val output = BufferedOutputStream(socket.getOutputStream(), 32 * 1024)
+    override val localAddress get() = socket.localSocketAddress as? java.net.InetSocketAddress
+    override val remoteAddress get() = socket.remoteSocketAddress as? java.net.InetSocketAddress
     override fun setReadTimeout(milliseconds: Int) { socket.soTimeout = milliseconds }
     override fun close() { socket.close() }
 }
@@ -104,8 +108,14 @@ class SoftEtherSession private constructor(
                     .str("ClientProductName", "SEVPN Android").str("ClientOsName", "Android")
                     .str("ClientOsVer", "26+").str("ClientHostname", "android-sevpn").str("ServerHostname", host)
                     .str("ServerProductName", hello.str("hello")!!).str("HubName", hub)
-                    .uint("ClientProductVer", 444).uint("ClientProductBuild", 9807)
-                    .uint("ServerProductVer", hello.int("version")).uint("ServerProductBuild", hello.int("build"))
+                    .uint("ClientProductVer", metadataInt(444)).uint("ClientProductBuild", metadataInt(9807))
+                    .uint("ServerProductVer", metadataInt(hello.int("version"))).uint("ServerProductBuild", metadataInt(hello.int("build")))
+                addAddress(login, "ClientIpAddress", "ClientIpAddress6", transport.localAddress)
+                addAddress(login, "ServerIpAddress", "ServerIpAddress6", transport.remoteAddress)
+                login.uint("ClientPort", metadataInt((transport.localAddress?.port ?: 0).toLong()))
+                    .uint("ServerPort2", metadataInt((transport.remoteAddress?.port ?: 0).toLong()))
+                    .str("ClientOsProductId", "").str("ProxyHostname", "").uint("ProxyPort", 0)
+                addAddress(login, "ProxyIpAddress", "ProxyIpAddress6", null)
                 val randomPad = ByteArray(SecureRandom().nextInt(1000)).also { SecureRandom().nextBytes(it) }
                 login.data("pencore", randomPad)
                 val auth = SoftEtherPackCodec.encode(login)
@@ -127,6 +137,14 @@ class SoftEtherSession private constructor(
             finally { hello?.wipe(); login?.wipe(); welcome?.wipe() }
         }
         private fun checkError(p: Pack) { val code = p.int("error"); if (code != 0L) throw SoftEtherServerException(code.toInt()) }
+        // CreateNodeInfo stores network-order numbers; OutRpcNodeInfo applies LittleEndian32.
+        private fun metadataInt(v: Long) = Integer.reverseBytes(v.toInt()).toLong() and 0xffffffffL
+        private fun addAddress(pack: Pack, name4: String, name6: String, socketAddress: java.net.InetSocketAddress?) {
+            val bytes = socketAddress?.address?.address
+            pack.uint(name4, if (bytes?.size == 4) metadataInt(ByteBuffer.wrap(bytes).int.toLong()) else 0)
+                .data(name6, if (bytes?.size == 16) bytes else ByteArray(16))
+                .bool("$name4@ipv6_bool", false).data("$name4@ipv6_array", ByteArray(16)).uint("$name4@ipv6_scope_id", 0)
+        }
     }
 }
 
