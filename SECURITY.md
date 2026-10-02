@@ -21,6 +21,16 @@ copies of entered passwords cannot be reliably erased; passwords are masked,
 excluded from saved state and cleared after saving. Temporary mutable secret
 buffers are wiped. FLAG_SECURE blocks screenshots and recent-task captures.
 
+Additional TLS sockets validate the same server certificate as the primary
+and authenticate attachment using its private session key. The key is copied
+under a short state lock and temporary PACK buffers are wiped. R-UDP/DNS
+always carries TLS; its legacy SHA-1/RC4 packet signing/encryption is the stock
+compatibility layer and cannot replace TLS server identity or confidentiality.
+Acceleration v2 uses platform ChaCha20-Poly1305; v1 preserves upstream's RC4,
+cookie and zero-trailer validation, which does not offer modern AEAD security.
+Plaintext acceleration is not accepted. Key-bearing objects have no diagnostic
+data-class output, and all random key/IV/transaction values use SecureRandom.
+
 ## Persistence
 
 Non-secret settings and stable random client identity use Preferences DataStore.
@@ -33,13 +43,18 @@ device transfer are excluded. Reinstall/key loss requires password re-entry.
 
 ## OS routing
 
-Every socket's descriptor is initialized before protection, without connecting
+Every primary/additional TCP, acceleration UDP and R-UDP UDP socket's
+descriptor is initialized before protection, without connecting
 or binding a local address. The socket is protected before connect and explicitly bound to a non-VPN
 underlying Network. Protection failure is a connection failure. DNS resolution
 of the transport hostname runs on that physical Network. This unavoidable
 server bootstrap resolution is distinct from application DNS, which uses DHCP
 DNS inside the full IPv4 route after TUN exists. Optional custom DNS is an
 explicit user choice; no arbitrary public resolver is selected automatically.
+Optional acceleration NAT discovery resolves the upstream NAT-T hostname on
+the physical Network and uses its already protected UDP socket. R-UDP/DNS
+targets only the configured server IPv4/UDP53. Protection/bind failures close
+the socket immediately. Network migration creates fresh keys and mappings.
 
 IPv6 is blocked while the VPN interface is active by not configuring or
 allowing that address family. IPv6 tunneling is not implemented. There is
@@ -66,6 +81,10 @@ to 8. ARP cache expires and has at most 256 entries. No per-packet coroutine
 creation, GlobalScope or unbounded retransmission queues. Blocking TLS read/
 write is interrupted by closing the raw socket at cancellation; nonblocking
 TUN uses cancellable poll intervals. Stalled tunnel writes have a watchdog.
+Pool writers are bounded to 16 frames per connection, at most 32 sockets.
+R-UDP uses 64-segment send/reassembly windows, 512-byte segments and bounded
+64 KiB FIFOs/128-segment stream queues. Datagram sizes and ACK counts are
+validated before allocation; corrupt packets do not enlarge those windows.
 
 ## Diagnostics and release gate
 

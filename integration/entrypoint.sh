@@ -15,6 +15,7 @@ hubcmd() { /opt/vpncmd/vpncmd localhost:5555 /SERVER /HUB:TEST /PASSWORD: /CMD "
 n=0
 until cmd ServerInfoGet; do n=$((n + 1)); test "$n" -lt 30; sleep 1; done
 cmd ServerCertSet /LOADCERT:/test-artifacts/server.crt /LOADKEY:/test-artifacts/server.key
+cmd VpnOverIcmpDnsEnable /ICMP:no /DNS:yes
 cmd HubCreate TEST /PASSWORD:
 cmd HubCreate NODHCP /PASSWORD:
 /opt/vpncmd/vpncmd localhost:5555 /SERVER /HUB:NODHCP /PASSWORD: /CMD UserCreate test /GROUP:none /REALNAME:none /NOTE:none >/dev/null

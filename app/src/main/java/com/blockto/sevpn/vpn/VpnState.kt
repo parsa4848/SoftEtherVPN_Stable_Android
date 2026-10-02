@@ -3,12 +3,13 @@ package com.blockto.sevpn.vpn
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import com.blockto.sevpn.protocol.SessionStatistics
 
 enum class VpnPhase { IDLE, PREPARING, CONNECTING_TRANSPORT, TLS_HANDSHAKE, SOFTETHER_HANDSHAKE,
     AUTHENTICATING, SESSION_ESTABLISHED, DHCP, CONFIGURING_TUN, CONNECTED, RECONNECTING, DISCONNECTING, ERROR }
 data class VpnStatus(val phase: VpnPhase = VpnPhase.IDLE, val message: String = "Disconnected",
                      val txBytes: Long = 0, val rxBytes: Long = 0, val connectedAtMs: Long = 0,
-                     val lastFailure: ConnectionFailure? = null)
+                     val lastFailure: ConnectionFailure? = null, val session: SessionStatistics = SessionStatistics())
 
 object VpnRuntime {
     private val mutable = MutableStateFlow(VpnStatus())
@@ -21,7 +22,7 @@ object VpnRuntime {
             connectedAtMs = if (phase == VpnPhase.CONNECTED) System.currentTimeMillis() else 0) }
         diagnostics.phase(phase)
     }
-    fun statistics(tx: Long, rx: Long) { mutable.update { it.copy(txBytes = tx, rxBytes = rx) } }
+    fun statistics(tx: Long, rx: Long, session: SessionStatistics = SessionStatistics()) { mutable.update { it.copy(txBytes = tx, rxBytes = rx, session = session) } }
     fun error(message: String, category: String, serverCode: Int? = null) { diagnostics.error(category, serverCode); phase(VpnPhase.ERROR, message) }
 }
 
@@ -35,5 +36,9 @@ class DiagnosticLog {
     }
     private fun append(line: String) { if (lines.size >= 200) lines.removeFirst(); lines.addLast("${java.time.Instant.now()} $line") }
     @Synchronized fun export(): String = "SEVPN sanitized diagnostics v2\napp_version=${com.blockto.sevpn.BuildConfig.VERSION_NAME}\n" + lines.joinToString("\n") + "\n" +
-        VpnRuntime.status.value.let { "tx_bytes=${it.txBytes} rx_bytes=${it.rxBytes}\n" }
+        VpnRuntime.status.value.let { "tx_bytes=${it.txBytes} rx_bytes=${it.rxBytes}\n" + it.session.let { s ->
+            "transport=${s.transportType} requested_connections=${s.requestedTcpConnections} negotiated_connections=${s.negotiatedMaxConnections} active_tcp_connections=${s.activeTcpConnections}\n" +
+            "udp_requested=${s.udpAccelerationRequested} udp_negotiated=${s.udpAccelerationNegotiated} udp_active=${s.udpAccelerationActive} udp_tx=${s.udpAccelerationBytesSent} udp_rx=${s.udpAccelerationBytesReceived}\n" +
+            "rudp_dns_tx_packets=${s.rudpDnsPacketsSent} rudp_dns_rx_packets=${s.rudpDnsPacketsReceived} rudp_dns_retransmissions=${s.rudpDnsRetransmissions}\n"
+        } }
 }

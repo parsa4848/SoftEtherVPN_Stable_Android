@@ -4,5 +4,7 @@ services:
     platform: linux/amd64
     ports:
       - "127.0.0.1:5555:5555"
+      - "127.0.0.1:53:53/udp"
+      - "127.0.0.1:40000-40100:40000-40100/udp"
     volumes:
       - ./.local:/test-artifacts

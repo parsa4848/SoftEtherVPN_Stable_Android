@@ -29,14 +29,19 @@ class ResourceLifecycleTest {
         repeat(300) { log.phase(VpnPhase.CONNECTING_TRANSPORT) }
         log.error("SERVER", 9)
         val text = log.export()
-        assertTrue(text.lines().size <= 205)
+        assertEquals(200, text.lines().count { it.contains("phase=") || it.contains("error=") })
+        assertTrue(text.lines().size <= 208) // bounded history plus transport statistics
         assertTrue(text.contains("server_code=9"))
         try { log.error("password=unsafe", null); fail() } catch (_: IllegalArgumentException) {}
     }
     @Test fun profileRejectsUrlsBadPinsAndUnusableDns() {
         val p = VpnProfile(host = "vpn.example.org", hub = "TEST", username = "user")
         p.validate()
-        listOf(p.copy(host = "https://vpn.example.org"), p.copy(port = 0), p.copy(certificatePin = "bad"), p.copy(dnsOverride = "127.0.0.1"), p.copy(mtu = 1600)).forEach {
+        assertEquals(1, p.requestedTcpConnections)
+        assertFalse(p.udpAccelerationEnabled)
+        assertEquals(com.blockto.sevpn.protocol.TransportMode.TCP, p.transportMode)
+        assertEquals(p.identity, p.copy(requestedTcpConnections = 32, udpAccelerationEnabled = true).identity)
+        listOf(p.copy(host = "https://vpn.example.org"), p.copy(port = 0), p.copy(certificatePin = "bad"), p.copy(dnsOverride = "127.0.0.1"), p.copy(mtu = 1600), p.copy(requestedTcpConnections = 0), p.copy(requestedTcpConnections = 33)).forEach {
             try { it.validate(); fail() } catch (_: IllegalArgumentException) {}
         }
     }

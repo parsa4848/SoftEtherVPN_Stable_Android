@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import com.blockto.sevpn.l2.Mac
+import com.blockto.sevpn.protocol.TransportMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -13,14 +14,20 @@ private val Context.profileData by preferencesDataStore("vpn_profile")
 
 class VpnProfileRepository(private val context: Context) {
     private val secrets = CredentialStore()
-    private val name = stringPreferencesKey("name"); private val host = stringPreferencesKey("host")
-    private val port = intPreferencesKey("port"); private val hub = stringPreferencesKey("hub")
-    private val username = stringPreferencesKey("username"); private val pin = stringPreferencesKey("certificate_pin")
-    private val mtu = intPreferencesKey("mtu"); private val reconnect = booleanPreferencesKey("reconnect")
-    private val anonymous = booleanPreferencesKey("anonymous"); private val dns = stringPreferencesKey("dns")
-    private val password = stringPreferencesKey("password_aes_gcm"); private val mac = longPreferencesKey("mac")
-    private val machine = stringPreferencesKey("machine_id")
-    private fun profile(p: Preferences) = VpnProfile(p[name] ?: "SoftEther VPN", p[host] ?: "", p[port] ?: 443, p[hub] ?: "", p[username] ?: "", p[pin] ?: "", p[mtu] ?: 1400, p[reconnect] ?: true, p[anonymous] ?: false, p[dns] ?: "")
+    companion object {
+        private val name = stringPreferencesKey("name"); private val host = stringPreferencesKey("host")
+        private val port = intPreferencesKey("port"); private val hub = stringPreferencesKey("hub")
+        private val username = stringPreferencesKey("username"); private val pin = stringPreferencesKey("certificate_pin")
+        private val mtu = intPreferencesKey("mtu"); private val reconnect = booleanPreferencesKey("reconnect")
+        private val anonymous = booleanPreferencesKey("anonymous"); private val dns = stringPreferencesKey("dns")
+        private val password = stringPreferencesKey("password_aes_gcm"); private val mac = longPreferencesKey("mac")
+        private val machine = stringPreferencesKey("machine_id")
+        private val count = intPreferencesKey("tcp_connection_count")
+        private val acceleration = booleanPreferencesKey("udp_acceleration_enabled")
+        private val transport = stringPreferencesKey("transport_mode")
+        internal fun profile(p: Preferences) = VpnProfile(p[name] ?: "SoftEther VPN", p[host] ?: "", p[port] ?: 443, p[hub] ?: "", p[username] ?: "", p[pin] ?: "", p[mtu] ?: 1400, p[reconnect] ?: true, p[anonymous] ?: false, p[dns] ?: "",
+            p[count] ?: 1, p[acceleration] ?: false, TransportMode.entries.firstOrNull { it.name == p[transport] } ?: TransportMode.TCP)
+    }
     suspend fun load(): VpnProfile = profile(context.profileData.data.first())
     suspend fun hasPassword() = !context.profileData.data.first()[password].isNullOrEmpty()
     suspend fun save(v: VpnProfile, newPassword: CharArray?) = withContext(Dispatchers.IO) {
@@ -31,6 +38,7 @@ class VpnProfileRepository(private val context: Context) {
             val sameIdentity = profile(p).identity == v.identity
             p[name] = v.name; p[host] = v.host; p[port] = v.port; p[hub] = v.hub; p[username] = v.username
             p[pin] = v.certificatePin; p[mtu] = v.mtu; p[reconnect] = v.reconnect; p[anonymous] = v.anonymous; p[dns] = v.dnsOverride
+            p[count] = v.requestedTcpConnections; p[acceleration] = v.udpAccelerationEnabled; p[transport] = v.transportMode.name
             if (encrypted != null) p[password] = encrypted else if (!sameIdentity || v.anonymous) p.remove(password)
             if (p[mac] == null) p[mac] = Mac.generate().bits
             if (p[machine] == null) p[machine] = android.util.Base64.encodeToString(ByteArray(20).also { SecureRandom().nextBytes(it) }, android.util.Base64.NO_WRAP)

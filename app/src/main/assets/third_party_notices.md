@@ -16,10 +16,15 @@ Copyright (c) all contributors on SoftEther VPN project in GitHub.
 
 Licensed under the Apache License, Version 2.0. A copy is in
 `licenses/Apache-2.0.txt`. Protocol serialization, negotiation and session
-handling were implemented in Kotlin from the upstream behavior. `Sha0.kt` is
+handling, additional connections, UDP acceleration and R-UDP/DNS were
+implemented in Kotlin from the upstream behavior. `Sha0.kt` is
 a Kotlin adaptation of the SHA-0 implementation in Mayaqua/Encrypt.c. The
-upstream-C fixture generator extracts selected hash and PACK functions into a
-temporary test harness. Changes include Kotlin types and bounds, correct
+upstream-C fixture generators extract selected hash/PACK and transport packet
+writers into temporary test harnesses. The transport harness executes
+SoftEther's embedded libsodium AEAD reference for fixtures only, preserving
+its upstream ISC license text in the extracted code. No libsodium code is
+bundled into the Android app; production v2 uses the platform JCA provider.
+Changes include Kotlin types and bounds, correct
 padding at block boundaries, temporary-buffer wiping and Android stream
 integration. No SoftEther server/client executable, TAP driver, OpenSSL binary
 or complete native source tree is distributed in the Android APK.
@@ -322,7 +327,6 @@ STATEMENT FOR WARNING AND DISCLAIMER.
 READ AND UNDERSTAND THE 'src/WARNING.TXT' FILE BEFORE USING THIS SOFTWARE.
 SOME SOFTWARE PROGRAMS FROM THIRD PARTIES ARE INCLUDED ON THIS SOFTWARE WITH
 LICENSE CONDITIONS WHICH ARE DESCRIBED ON THE 'src/THIRD_PARTY.TXT' FILE.
-
 
 
 # AOSP BSD license

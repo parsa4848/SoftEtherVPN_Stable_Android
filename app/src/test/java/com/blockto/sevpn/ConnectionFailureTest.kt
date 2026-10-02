@@ -10,6 +10,14 @@ import java.net.ConnectException
 import javax.net.ssl.SSLHandshakeException
 
 class ConnectionFailureTest {
+    @Test fun udp53FailuresHaveSpecificSafeCategories() {
+        for (cause in com.blockto.sevpn.protocol.RudpFailure.entries) {
+            val failure = ConnectionFailures.classify(com.blockto.sevpn.protocol.RudpException(cause), VpnPhase.SOFTETHER_HANDSHAKE)
+            assertEquals(FailureKind.RUDP, failure.kind)
+            assertEquals("RUDP_${cause.name}", failure.category)
+            assertFalse(failure.message.contains("TCP connection"))
+        }
+    }
     @Test fun socketProtectionFailureIsTerminalAndDistinctFromNetworkLoss() {
         val failed = ConnectionFailures.classify(TransportSetupException(TransportStep.SOCKET_PROTECTION, IOException("synthetic-private-details")), VpnPhase.CONNECTING_TRANSPORT)
         assertEquals(FailureKind.SOCKET_PROTECTION, failed.kind); assertFalse(failed.retry)
@@ -41,5 +49,6 @@ class ConnectionFailureTest {
     @Test fun nativeServerErrorsRetainTheirNumericCode() {
         val failure = ConnectionFailures.classify(SoftEtherServerException(9), VpnPhase.AUTHENTICATING)
         assertEquals(FailureKind.SERVER, failure.kind); assertEquals(9, failure.serverCode); assertFalse(failure.retry)
+        for (code in listOf(13, 14)) assertTrue(ConnectionFailures.classify(SoftEtherServerException(code), VpnPhase.CONNECTED).retry)
     }
 }

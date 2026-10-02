@@ -8,6 +8,30 @@ VpnService or substitute for the phone/browser acceptance test.
 
 ## Local unmodified Stable server
 
+The Windows fixture has been executed against officially signed Stable 4.44
+build 9807 binaries. It runs in user mode with fresh synthetic admin/user
+passwords, no installed Windows service or TAP/kernel driver, and test hubs.
+Its config disables DDNS, NAT-T discovery and ICMP; VPN-over-DNS is enabled.
+Python 3, 7-Zip and a built integration distribution are required:
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Android\Android Studio\jbr'
+.\gradlew.bat :integration:installDist
+.\integration\windows-stock-server.ps1 -Action Start
+.\integration\run-matrix.ps1
+.\integration\run-transport-matrix.ps1
+.\integration\windows-stock-server.ps1 -Action Stop
+```
+
+Setup verifies the installer/server signatures and extracts resources without
+running the installer. Credentials remain in ignored `.local`. Management
+uses TCP5555; R-UDP uses UDP53. These ports must be available. Keep `.local`
+private. Stop the fixture before JVM tests: the stream test also binds UDP53.
+Stop checks the recorded PID's executable path. Executed evidence is in
+[TEST_RESULTS.md](../TEST_RESULTS.md); Android VpnService remains a separate gate.
+
+### Docker alternative
+
 Install Docker with Linux amd64 support, then from the project root:
 
 ```sh
@@ -18,14 +42,15 @@ docker compose -f integration/compose.yaml logs -f
 The image builds the stock pinned Stable source, without patches. Configuration
 creates TEST with SecureNAT/DHCP, NODHCP without DHCP, password users and a guest
 anonymous user. It installs an ephemeral certificate with localhost SAN.
-Only localhost TCP 5555 is published. This fixture uses an empty management
+Only localhost TCP5555, UDP53 and UDP40000–40100 are published; the stock
+server assigns acceleration ports starting at 40000. VPN-over-DNS is enabled.
+This Docker fixture uses an empty management
 password and **must remain bound to loopback**; never expose it on a public
 interface. Generated test password, private key, certificate and fingerprint
 are in ignored `integration/.local/`, mode 0600 on Unix.
 
-The Docker fixture is provided but was not executed on the supplied Windows
-host: Docker/WSL are unavailable. Validate its first build on a Docker host
-before treating it as a passing integration result.
+Docker/WSL are unavailable on this host, so the Docker alternative is untested.
+The executed integration evidence uses the signed Windows fixture above.
 
 ```powershell
 .\gradlew.bat :integration:installDist
@@ -36,6 +61,13 @@ $env:JAVA_HOME = 'C:\Program Files\Android\Android Studio\jbr'
 The matrix covers pinned self-signed trust, native auth/session, DHCP, UDP DNS,
 TCP HTTP, incorrect credentials, missing hub, default rejection of a self-signed
 certificate, incorrect pin, no DHCP and a second complete connection.
+
+The transport matrix exercises 1/2/4/8/32 TCP connections, secondary loss and
+restoration, acceleration v2, UDP loss with TCP continuation, and explicit
+R-UDP/DNS with zero TCP connections. Local Windows `vpncmd` independently
+checks held single-session logins with server `SessionGet` for 2/4/8/32.
+Additional observed checks cover server clamping, declined acceleration, v1
+real data, UDP53 TLS rejection and disabled UDP53 with reachable TCP.
 
 With a connected phone/emulator:
 
@@ -49,7 +81,8 @@ the JVM. The APK does not need a test-server password embedded in the source.
 ## Existing server
 
 Use the generated runner executable from a terminal. Parameters contain no
-password: `host port hub username [pin|-] [scenario]`. Default scenario is
+password: `host port hub username [pin|-] [scenario] [connections] [transport]
+[udp-mode] [hold-seconds]`. Default scenario is
 `traffic`. Set the temporary process environment variable SEVPN_TEST_PASSWORD
 from a secure local prompt, or run a terminal with Java Console support.
 Never put real secrets in source, command arguments or saved scripts.
@@ -70,6 +103,14 @@ For private servers replace `-` with the verified leaf SHA-256 fingerprint.
 Other scenarios: `login`, `error:9` (supply a deliberately wrong password),
 `error:8` (supply a missing hub), `no-dhcp` (a configured user on a hub without
 DHCP), and `tls-error`. No authentication failure is counted as a DHCP failure.
+
+Transport is `TCP`, `AUTO` or `RUDP_DNS_53`; UDP mode is `udp-off`, `udp-on`
+(v2) or `udp-v1`. `secondary-loss` and `udp-drop` close a socket then require
+another DNS/HTTP exchange in the same session. `udp-unavailable` requires the
+hub option `ExtOptionSet DisableUdpAcceleration /VALUE:1`. `rudp-failure`
+requires explicit UDP53 and a stopped DNS listener. Use the stock command
+`VpnOverIcmpDnsEnable /ICMP:no /DNS:yes` to enable DNS transport. Restore test
+policies/listeners after a negative test.
 
 Normal trusted validation with the fixture certificate can be tested by
 importing it into a **test-only** Java truststore and setting JAVA_OPTS with

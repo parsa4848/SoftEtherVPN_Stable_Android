@@ -11,6 +11,7 @@ import java.security.MessageDigest
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.*
+import com.blockto.sevpn.protocol.SocketTransport
 
 /** Actual loopback TLS handshakes; ephemeral test key material, never user keys. */
 class TlsHandshakeTest {
@@ -43,6 +44,36 @@ class TlsHandshakeTest {
         val clientContext = SSLContext.getInstance("TLS").apply { init(null, tm.trustManagers, null) }
         handshake(serverContext, TlsPolicy(), true, clientContext.socketFactory, "localhost")
         handshake(serverContext, TlsPolicy(), false, clientContext.socketFactory, "wrong.example")
+    }
+    @Test fun engineOverStreamsPreservesPinnedAndTrustedTlsAndCarriesBytes() {
+        val (serverContext, store) = fixture()
+        val pin = MessageDigest.getInstance("SHA-256").digest(store.getCertificate("fixture").encoded).joinToString("") { "%02x".format(it) }
+        val trust = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).apply { init(store) }
+        val trusted = SSLContext.getInstance("TLS").apply { init(null, trust.trustManagers, null) }
+        for ((policy, identity, succeeds) in listOf(Triple(TlsPolicy(pin), "localhost", true), Triple(TlsPolicy("00".repeat(32)), "localhost", false),
+            Triple(TlsPolicy(), "localhost", true), Triple(TlsPolicy(), "wrong.example", false))) {
+            val server = serverContext.serverSocketFactory.createServerSocket(0, 1, InetAddress.getLoopbackAddress()) as SSLServerSocket
+            server.soTimeout = 4000
+            val executor = Executors.newSingleThreadExecutor()
+            val job = executor.submit { runCatching { (server.accept() as SSLSocket).use { socket ->
+                socket.soTimeout = 4000; socket.startHandshake()
+                val data = ByteArray(60_000); java.io.DataInputStream(socket.inputStream).readFully(data)
+                socket.outputStream.write(data); socket.outputStream.flush()
+            } } }
+            try {
+                val raw = Socket().apply { connect(InetSocketAddress(InetAddress.getLoopbackAddress(), server.localPort), 3000); soTimeout = 4000 }
+                val engine = if (policy.isPinned) policy.engine(identity, server.localPort) else trusted.createSSLEngine(identity, server.localPort).apply {
+                    useClientMode = true; sslParameters = sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
+                }
+                StreamTlsTransport(SocketTransport(raw), engine).use { stream ->
+                    try {
+                        stream.handshake(); assertTrue(succeeds)
+                        val bytes = ByteArray(60_000) { it.toByte() }; stream.output.write(bytes); stream.output.flush()
+                        val reply = ByteArray(bytes.size); java.io.DataInputStream(stream.input).readFully(reply); assertArrayEquals(bytes, reply)
+                    } catch (_: SSLException) { assertFalse(succeeds) }
+                }
+            } finally { server.close(); job.get(5, TimeUnit.SECONDS); executor.shutdownNow() }
+        }
     }
     private fun handshake(serverContext: SSLContext, policy: TlsPolicy, expected: Boolean,
                           factory: SSLSocketFactory = policy.socketFactory(), identity: String = "localhost") {

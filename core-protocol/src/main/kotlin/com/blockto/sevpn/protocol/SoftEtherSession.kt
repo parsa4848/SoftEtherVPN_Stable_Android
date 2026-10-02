@@ -7,6 +7,8 @@ import java.security.SecureRandom
 import java.util.Locale
 
 interface SoftEtherTransport : Closeable {
+    val peerCertificate: ByteArray? get() = null
+    val type: TransportType get() = TransportType.TCP
     val input: InputStream
     val output: OutputStream
     val localAddress: java.net.InetSocketAddress? get() = null
@@ -15,6 +17,7 @@ interface SoftEtherTransport : Closeable {
 }
 
 class SocketTransport(private val socket: Socket) : SoftEtherTransport {
+    override val peerCertificate: ByteArray? get() = (socket as? javax.net.ssl.SSLSocket)?.session?.peerCertificates?.firstOrNull()?.encoded
     override val input = BufferedInputStream(socket.getInputStream(), 32 * 1024)
     override val output = BufferedOutputStream(socket.getOutputStream(), 32 * 1024)
     override val localAddress get() = socket.localSocketAddress as? java.net.InetSocketAddress
@@ -29,6 +32,8 @@ class SoftEtherServerException(val code: Int) : IOException(when (code) {
     9 -> "Username or password rejected"
     10 -> "Virtual Hub is offline"
     12 -> "Server policy denied access"
+    13 -> "SoftEther session expired"
+    14 -> "SoftEther session is no longer valid"
     15, 16, 20 -> "Server connection or session limit reached"
     else -> "SoftEther server error $code"
 })
@@ -75,13 +80,50 @@ class SoftEtherSession private constructor(
     val sessionName: String,
     val timeoutMs: Int,
     private val sessionKey: ByteArray,
-    private var sessionKey32: Long
+    private var sessionKey32: Long,
+    val requestedTcpConnections: Int,
+    val negotiatedMaxConnections: Int,
+    val udpAcceleration: UdpAccelerationConfig?
 ) : Closeable {
     val channel = SoftEtherDataChannel(transport)
-    override fun close() { try { transport.close() } finally { sessionKey.fill(0); sessionKey32 = 0 } }
+    val primaryTransport get() = transport
+    private val keyLock = Any()
+    private var closed = false
+    fun attachAdditional(next: SoftEtherTransport, host: String): AdditionalConnection {
+        var hello: Pack? = null; var reply: Pack? = null; var pack: Pack? = null
+        try {
+            val identity = transport.peerCertificate
+            if (identity != null && !java.security.MessageDigest.isEqual(identity, next.peerCertificate))
+                throw javax.net.ssl.SSLPeerUnverifiedException("Additional connection certificate changed")
+            val http = SoftEtherHttp(next, host)
+            next.setReadTimeout(15_000)
+            http.post("/vpnsvc/connect.cgi", "image/jpeg", "VPNCONNECT".toByteArray(Charsets.US_ASCII))
+            hello = http.receivePack(); checkError(hello)
+            if (hello.data("random")?.size != 20 || hello.str("hello") == null) throw ProtocolException("Invalid additional connection hello")
+            pack = synchronized(keyLock) {
+                if (closed) throw IOException("Session closed")
+                Pack().str("method", "additional_connect").data("session_key", sessionKey.copyOf())
+                    .str("client_str", "SEVPN Android").uint("client_ver", 444).uint("client_build", 9807)
+            }
+            val encoded = SoftEtherPackCodec.encode(pack)
+            try { http.post("/vpnsvc/vpn.cgi", "application/octet-stream", encoded) } finally { encoded.fill(0); pack.wipe() }
+            reply = http.receivePack(); checkError(reply)
+            val direction = reply.int("direction")
+            if (direction !in 0..2) throw ProtocolException("Invalid additional connection direction")
+            synchronized(keyLock) { if (closed) throw IOException("Session closed") }
+            next.setReadTimeout(timeoutMs)
+            return AdditionalConnection(next, direction.toInt())
+        } catch (e: Throwable) { runCatching { next.close() }; throw e }
+        finally { hello?.wipe(); reply?.wipe(); pack?.wipe() }
+    }
+    override fun close() {
+        synchronized(keyLock) { closed = true; sessionKey.fill(0); sessionKey32 = 0 }
+        udpAcceleration?.close()
+        transport.close()
+    }
     companion object {
         fun connect(transport: SoftEtherTransport, host: String, hub: String, username: String,
-                    password: CharArray?, machineId: ByteArray, authenticating: () -> Unit = {}): SoftEtherSession {
+                    password: CharArray?, machineId: ByteArray, options: SessionOptions = SessionOptions(), authenticating: () -> Unit = {}): SoftEtherSession {
             require(machineId.size == 20 && hub.toByteArray().size in 1..255 && username.toByteArray().size in 1..255)
             val http = SoftEtherHttp(transport, host)
             var hello: Pack? = null
@@ -99,10 +141,10 @@ class SoftEtherSession private constructor(
                 login = SoftEtherAuthenticator.login(hub, username, password, random)
                 login.str("client_str", "SEVPN Android").uint("client_ver", 444).uint("client_build", 9807)
                     .str("hello", "SEVPN Android").uint("version", 444).uint("build", 9807).uint("client_id", 0)
-                    .uint("protocol", 0).uint("max_connection", 1).bool("use_encrypt", true)
+                    .uint("protocol", 0).uint("max_connection", options.requestedTcpConnections.toLong()).bool("use_encrypt", true)
                     .bool("use_compress", false).bool("use_fast_rc4", false).bool("half_connection", false)
                     .bool("qos", false).bool("require_bridge_routing_mode", false).bool("require_monitor_mode", false)
-                    .bool("use_udp_acceleration", false).bool("support_udp_recovery", false)
+                    .bool("support_udp_recovery", false)
                     .bool("support_bulk_on_rudp", false).bool("support_hmac_on_bulk_of_rudp", false)
                     .data("unique_id", machineId.copyOf()).data("UniqueId", machineId.copyOf(16))
                     .str("ClientProductName", "SEVPN Android").str("ClientOsName", "Android")
@@ -116,6 +158,7 @@ class SoftEtherSession private constructor(
                     .uint("ServerPort2", metadataInt((transport.remoteAddress?.port ?: 0).toLong()))
                     .str("ClientOsProductId", "").str("ProxyHostname", "").uint("ProxyPort", 0)
                 addAddress(login, "ProxyIpAddress", "ProxyIpAddress6", null)
+                options.udpAcceleration?.advertise(login)
                 val randomPad = ByteArray(SecureRandom().nextInt(1000)).also { SecureRandom().nextBytes(it) }
                 login.data("pencore", randomPad)
                 val auth = SoftEtherPackCodec.encode(login)
@@ -123,16 +166,19 @@ class SoftEtherSession private constructor(
                 welcome = http.receivePack()
                 checkError(welcome)
                 if (welcome.bool("Redirect")) throw ProtocolException("Cluster redirects are not supported in this version")
-                if (!welcome.bool("use_encrypt") || welcome.bool("use_compress") || welcome.bool("use_fast_rc4") || welcome.bool("half_connection") || welcome.bool("qos") || welcome.bool("use_udp_acceleration"))
+                if (!welcome.bool("use_encrypt") || welcome.bool("use_compress") || welcome.bool("use_fast_rc4") || welcome.bool("half_connection") || welcome.bool("qos"))
                     throw ProtocolException("Server negotiated an unsupported or insecure transport")
-                if (welcome.int("max_connection") != 1L) throw ProtocolException("Server did not negotiate a single TCP channel")
+                val maxConnections = welcome.int("max_connection")
+                if (maxConnections !in 1..32) throw ProtocolException("Server connection limit outside bounds")
+                val negotiated = if (transport.type == TransportType.RUDP_DNS_53) 1 else minOf(maxConnections.toInt(), options.requestedTcpConnections)
                 val key = welcome.data("session_key") ?: throw ProtocolException("Missing session key")
                 val name = welcome.str("session_name") ?: throw ProtocolException("Missing session name")
                 if (key.size != 20 || welcome.str("connection_name") == null) throw ProtocolException("Malformed session welcome")
                 val timeout = welcome.int("timeout").toInt()
                 if (timeout !in 5000..60000) throw ProtocolException("Invalid session timeout")
                 transport.setReadTimeout(timeout)
-                return SoftEtherSession(transport, name, timeout, key.copyOf(), welcome.int("session_key_32"))
+                val acceleration = transport.remoteAddress?.address?.let { options.udpAcceleration?.negotiate(welcome, it) }
+                return SoftEtherSession(transport, name, timeout, key.copyOf(), welcome.int("session_key_32"), options.requestedTcpConnections, negotiated, acceleration)
             } catch (e: Throwable) { runCatching { transport.close() }; throw e }
             finally { hello?.wipe(); login?.wipe(); welcome?.wipe() }
         }
@@ -151,6 +197,7 @@ class SoftEtherSession private constructor(
 /** Connection.c: uint32 batch count, then uint32 size and Ethernet bytes.
  * FFFFFFFF starts a keepalive followed by uint32 size and up to 512 bytes. */
 class SoftEtherDataChannel(private val transport: SoftEtherTransport) {
+    var onKeepAlive: (ByteArray) -> Unit = {}
     private val input = DataInputStream(transport.input)
     private val output = DataOutputStream(transport.output)
     private var remainingFrames = 0
@@ -170,8 +217,7 @@ class SoftEtherDataChannel(private val transport: SoftEtherTransport) {
             if (count == -1) {
                 val size = input.readInt()
                 if (size !in 0..512) throw ProtocolException("Keepalive size exceeds bounds")
-                var n = size
-                while (n > 0) { if (input.read() < 0) throw EOFException(); n-- }
+                val body = ByteArray(size); input.readFully(body); onKeepAlive(body)
             } else {
                 if (count !in 0..4096) throw ProtocolException("Frame batch count exceeds bounds")
                 remainingFrames = count
@@ -183,5 +229,7 @@ class SoftEtherDataChannel(private val transport: SoftEtherTransport) {
         require(frame.size in 14..1600)
         output.writeInt(1); output.writeInt(frame.size); output.write(frame); output.flush()
     }
-    fun keepAlive() = synchronized(writeLock) { output.writeInt(-1); output.writeInt(0); output.flush() }
+    fun keepAlive(body: ByteArray = byteArrayOf()) = synchronized(writeLock) {
+        require(body.size <= 512); output.writeInt(-1); output.writeInt(body.size); output.write(body); output.flush()
+    }
 }

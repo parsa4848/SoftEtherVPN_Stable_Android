@@ -6,10 +6,15 @@ import java.io.Closeable
 class AttemptResources : Closeable {
     private val owned = mutableListOf<Closeable>()
     private var closed = false
-    @Synchronized fun <T : Closeable> own(value: T): T {
-        if (closed) { value.close(); throw java.io.IOException("Connection attempt cancelled") }
-        owned += value; return value
+    fun <T : Closeable> own(value: T): T {
+        val accepted = synchronized(this) { if (closed) false else { owned += value; true } }
+        if (!accepted) { runCatching { value.close() }; throw java.io.IOException("Connection attempt cancelled") }
+        return value
     }
+    @Synchronized fun release(value: Closeable) { owned.remove(value) }
     // Raw socket is registered first: abort TCP before TLS close-notify can block.
-    @Synchronized override fun close() { if (!closed) { closed = true; owned.forEach { runCatching { it.close() } }; owned.clear() } }
+    override fun close() {
+        val snapshot = synchronized(this) { if (closed) return; closed = true; owned.toList().also { owned.clear() } }
+        snapshot.forEach { runCatching { it.close() } }
+    }
 }

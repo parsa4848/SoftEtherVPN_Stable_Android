@@ -11,5 +11,5 @@ COPY --from=build /opt/stable/bin/vpnserver/ /opt/server/
 COPY --from=build /opt/stable/bin/vpncmd/ /opt/vpncmd/
 COPY entrypoint.sh /opt/entrypoint.sh
 WORKDIR /opt/server
-EXPOSE 5555
+EXPOSE 5555 53/udp 40000-40100/udp
 ENTRYPOINT ["/bin/sh", "/opt/entrypoint.sh"]

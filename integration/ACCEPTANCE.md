@@ -1,13 +1,13 @@
 # Required device acceptance
 
-Status: **pending**. No phone/emulator was connected to the build host. The
-user tested 0.1.0 on a Poco X6 Pro, Android 16, against Stable 4.41-9787-rtm
-on Windows Server 2019. Its diagnostics show repeated failures during
-CONNECTING_TRANSPORT, before TLS, with zero tunnel traffic. The 0.1.1 update
-fixes uninitialized socket protection and network callback races. Successful
-retest is pending. The user's 0.1.1 retest reaches TLS but fails validation
-with an empty pin field. Server certificate pin configuration is the next
-step. No remote server credentials were supplied to the agent.
+Status: **device acceptance pending for 0.2.0**. No phone/emulator is connected
+and no emulator system image is installed. The user supplied a working 0.1.1
+deployment as the baseline. The unchanged build and 44 tests were preserved
+before extending it. Host interoperability now passes against officially
+signed stock Stable 4.44/9807 on Windows: native authentication, DHCP, actual
+IPv4 DNS/HTTP, multiple TCP, acceleration v1/v2 and direct R-UDP/DNS.
+See [the executed evidence](../TEST_RESULTS.md). Host probes do not exercise
+Android protection, TUN, UI or Wi-Fi/mobile handover.
 
 Record phone model/Android API, server Stable version/build, transport port,
 hub network mode and test date. Never record passwords, hashes or session keys.
@@ -34,6 +34,18 @@ hub network mode and test date. Never record passwords, hashes or session keys.
 | Lease renewal | Valid renewal or controlled reacquisition; no expired lease use | Pending |
 | Keystore device test | connectedDebugAndroidTest passes | Pending |
 | Sustained transfer | Bounded memory, realistic throughput and no false Connected | Pending |
+| Profile migration | Existing encrypted password/identity retained; defaults 1/Off/TCP | Pending |
+| TCP 1/2/4/8/32 | One session/TUN/lease; server SessionGet agrees with requested/negotiated/active | Pending |
+| TCP server clamp | Requested 8/server allowed 4 shown correctly; traffic continues | Pending |
+| Secondary TCP loss | Other sockets carry traffic; replacement protected; no DHCP/TUN restart | Pending |
+| UDP Off | No acceleration socket/offer; normal TCP traffic | Pending |
+| UDP v2 On | Stock negotiation plus bidirectional payload bytes; Active only after data | Pending |
+| UDP unavailable/lost | Connected remains usable over TCP; readiness clears; probes can recover | Pending |
+| UDP endpoint migration | New authenticated peer endpoint used; fresh mapping on physical handover | Pending |
+| Direct UDP53 | Destination server IPv4:53; active TCP=0; TLS/auth/DHCP/TUN/Internet all succeed | Pending |
+| UDP53 disabled | Clear R-UDP error while TCP listener still works; no silent fallback | Pending |
+| Every underlay protected | Primary/additional TCP and both UDP types protected before activity | Pending |
+| Repeated disconnect/reconnect | Stable app FD/job counts; all old socket workers terminate | Pending |
 
 Automated host tests cannot close these gates. Update only after observed
 results. Preserve sanitized error export and server session evidence for

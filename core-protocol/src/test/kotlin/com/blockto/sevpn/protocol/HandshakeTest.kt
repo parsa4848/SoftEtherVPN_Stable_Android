@@ -46,11 +46,24 @@ class HandshakeTest {
         try { SoftEtherSession.connect(error, "server", "hub", "user", charArrayOf(), ByteArray(20)); fail() }
         catch (e: SoftEtherServerException) { assertEquals(9, e.code) }
         assertTrue(error.closed)
-        for (w in listOf(welcome().bool("use_encrypt", false), welcome().bool("use_compress", true), welcome().uint("max_connection", 2))) {
+        for (w in listOf(welcome().bool("use_encrypt", false), welcome().bool("use_compress", true), welcome().uint("max_connection", 33))) {
             val t = fixture(w)
             try { SoftEtherSession.connect(t, "server", "hub", "user", charArrayOf(), ByteArray(20)); fail() } catch (_: ProtocolException) {}
             assertTrue(t.closed)
         }
+    }
+    @Test fun requestedAndNegotiatedCountsAreSeparate() {
+        for (n in listOf(1, 2, 4, 8, 32)) {
+            val t = fixture(welcome().uint("max_connection", n.toLong()))
+            val s = SoftEtherSession.connect(t, "server", "hub", "user", charArrayOf(), ByteArray(20), SessionOptions(n))
+            assertEquals(n, s.requestedTcpConnections); assertEquals(n, s.negotiatedMaxConnections)
+            val bytes = t.output.toByteArray(); val str = String(bytes, Charsets.ISO_8859_1)
+            val offset = str.indexOf("\r\n\r\n", str.indexOf("POST /vpnsvc/vpn.cgi")) + 4
+            assertEquals(n.toLong(), SoftEtherPackCodec.decode(bytes.copyOfRange(offset, bytes.size)).int("max_connection"))
+            s.close()
+        }
+        val s = SoftEtherSession.connect(fixture(welcome().uint("max_connection", 4)), "server", "hub", "user", charArrayOf(), ByteArray(20), SessionOptions(8))
+        assertEquals(8, s.requestedTcpConnections); assertEquals(4, s.negotiatedMaxConnections); s.close()
     }
     @Test fun boundedMutationalPackFuzz() {
         val random = java.util.Random(7)

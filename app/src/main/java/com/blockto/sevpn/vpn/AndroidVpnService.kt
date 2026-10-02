@@ -94,40 +94,52 @@ class AndroidVpnService : VpnService() {
     @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun CoroutineScope.runSession(profile: VpnProfile, network: Network, resources: AttemptResources, connected: () -> Unit) {
         VpnRuntime.phase(VpnPhase.CONNECTING_TRANSPORT, "Connecting to server")
-        val transport = SoftEtherTlsTransport(this@AndroidVpnService).connect(profile, network, resources)
+        val selected = TransportSelector(this@AndroidVpnService).connect(profile, network, resources, this)
+        val transport = selected.stream
+        val udpSocket = if (profile.udpAccelerationEnabled && transport.type == TransportType.TCP) try {
+            withContext(Dispatchers.IO) { ProtectedDatagrams.create(this@AndroidVpnService, network, resources, transport.localAddress?.address) }
+        } catch (e: TransportSetupException) {
+            VpnRuntime.diagnostics.failure(ConnectionFailures.classify(e, VpnPhase.CONNECTING_TRANSPORT)); null
+        } else null
+        val offer = udpSocket?.let { resources.own(UdpAccelerationOffer(java.net.InetSocketAddress(it.localAddress, it.localPort))) }
         val (mac, machine) = repo.ethernetIdentity()
         val password = try { repo.credentials(profile) } catch (_: Exception) { throw ProfileCredentialException() }
         VpnRuntime.phase(VpnPhase.SOFTETHER_HANDSHAKE, "Negotiating SoftEther session")
         val session = try { withContext(Dispatchers.IO) {
-            resources.own(SoftEtherSession.connect(transport, profile.host, profile.hub, profile.username, password, machine) {
+            resources.own(SoftEtherSession.connect(transport, profile.host, profile.hub, profile.username, password, machine, SessionOptions(profile.requestedTcpConnections, offer)) {
                 VpnRuntime.phase(VpnPhase.AUTHENTICATING, "Authenticating to Virtual Hub")
             })
-        } } finally { password?.fill('\u0000'); machine.fill(0) }
+        } } catch (e: IOException) {
+            if (transport.type == TransportType.RUDP_DNS_53 && e !is SoftEtherServerException && e !is RudpException && e !is javax.net.ssl.SSLException)
+                throw RudpException(RudpFailure.SOFTETHER_HANDSHAKE)
+            throw e
+        } finally { password?.fill('\u0000'); machine.fill(0) }
+        offer?.close()
+        if (session.udpAcceleration == null) udpSocket?.close()
         VpnRuntime.phase(VpnPhase.SESSION_ESTABLISHED, "SoftEther session established")
-        val inbound = Channel<ByteArray>(128)
-        val outbound = Channel<ByteArray?>(128) // null is the native keepalive record.
-        val writeStarted = AtomicLong(0)
-        launch(Dispatchers.IO) { while (isActive) inbound.send(session.channel.readFrame()) }
-        launch(Dispatchers.IO) {
-            for (frame in outbound) {
-                writeStarted.set(monotonic())
-                try { if (frame == null) session.channel.keepAlive() else session.channel.sendFrame(frame) }
-                finally { writeStarted.set(0) }
-            }
+        var acceleration: UdpAccelerationEngine? = null
+        val additional: (suspend () -> AdditionalConnection)? = if (transport.type == TransportType.TCP) ({
+            val child = resources.own(AttemptResources())
+            try {
+                val socket = SoftEtherTlsTransport(this@AndroidVpnService).connect(profile, network, child,
+                    transport.remoteAddress?.address, announce = false)
+                withContext(Dispatchers.IO) { session.attachAdditional(OwnedTransport(socket, child, resources), profile.host) }
+            } catch (e: Throwable) { child.close(); resources.release(child); throw e }
+        }) else null
+        val pool = resources.own(SoftEtherConnectionPool(session, this, additional,
+            keepAliveBody = { acceleration?.keepAliveBody() ?: byteArrayOf() },
+            receivedKeepAlive = { acceleration?.receiveKeepAlive(it) }))
+        pool.start()
+        val accelerationConfig = session.udpAcceleration
+        if (udpSocket != null && accelerationConfig != null) {
+            acceleration = resources.own(UdpAccelerationEngine(udpSocket, accelerationConfig, this, pool.inbound,
+                { pool.sendFrame(it) }, { host -> network.getAllByName(host).firstOrNull { it is java.net.Inet4Address } }))
+            acceleration.start()
         }
-        launch {
-            while (isActive) {
-                delay((session.timeoutMs / 3).toLong()); withTimeout(session.timeoutMs.toLong()) { outbound.send(null) }
-            }
-        }
-        launch {
-            while (isActive) {
-                delay(1000); val start = writeStarted.get()
-                if (start != 0L && monotonic() - start > session.timeoutMs) { resources.close(); throw TunnelWriteStalledException() }
-            }
-        }
+        val inbound = pool.inbound
+        val send: suspend (ByteArray) -> Unit = { if (acceleration?.trySend(it) != true) pool.sendFrame(it) }
         VpnRuntime.phase(VpnPhase.DHCP, "Obtaining IP address from Virtual Hub")
-        var lease = DhcpClient(mac, { outbound.send(it) }, inbound, profile.dns()).acquire()
+        var lease = DhcpClient(mac, send, inbound, profile.dns()).acquire()
         VpnRuntime.phase(VpnPhase.CONFIGURING_TUN, "Configuring Android VPN")
         setUnderlyingNetworks(arrayOf(network))
         val builder = Builder().setSession(profile.name).setMtu(profile.mtu).setBlocking(false)
@@ -138,7 +150,13 @@ class AndroidVpnService : VpnService() {
         val tun = resources.own(TunDevice(builder.establish() ?: throw TunEstablishException(), profile.mtu))
         val fromTun = Channel<ByteArray>(128); val toTun = Channel<ByteArray>(128); val dhcpReplies = Channel<ByteArray>(16)
         val readerReady = CompletableDeferred<Unit>(); val writerReady = CompletableDeferred<Unit>(); val bridgeReady = CompletableDeferred<Unit>()
-        val endpoint = VirtualEthernetEndpoint(mac, Ipv4RoutingEngine(lease.address, lease.prefix, lease.gateway, lease.routes), profile.mtu, { outbound.send(it) })
+        val endpoint = VirtualEthernetEndpoint(mac, Ipv4RoutingEngine(lease.address, lease.prefix, lease.gateway, lease.routes), profile.mtu, send)
+        fun publishStatistics() = VpnRuntime.statistics(endpoint.transmittedBytes, endpoint.receivedBytes, SessionStatistics(
+            session.requestedTcpConnections, session.negotiatedMaxConnections, pool.activeTcpConnections, transport.type,
+            profile.udpAccelerationEnabled, accelerationConfig != null, acceleration?.active == true,
+            acceleration?.bytesSent?.get() ?: 0, acceleration?.bytesReceived?.get() ?: 0,
+            selected.rudp?.packetsSent?.get() ?: 0, selected.rudp?.packetsReceived?.get() ?: 0, selected.rudp?.retransmissions?.get() ?: 0))
+        publishStatistics()
         launch { tun.readPackets(fromTun, readerReady) }
         launch { writerReady.complete(Unit); for (packet in toTun) tun.writePacket(packet) }
         launch {
@@ -155,11 +173,14 @@ class AndroidVpnService : VpnService() {
                     onTimeout(250) { }
                 }
                 endpoint.tick()
-                if (monotonic() - lastStats >= 1000) { VpnRuntime.statistics(endpoint.transmittedBytes, endpoint.receivedBytes); lastStats = monotonic() }
+                if (monotonic() - lastStats >= 1000) {
+                    publishStatistics()
+                    lastStats = monotonic()
+                }
             }
         }
         launch {
-            val renewal = DhcpClient(mac, { outbound.send(it) }, dhcpReplies, profile.dns())
+            val renewal = DhcpClient(mac, send, dhcpReplies, profile.dns())
             while (isActive) {
                 delay(maxOf(1000, lease.acquiredMs + lease.renewSeconds * 1000 - monotonic()))
                 var updated: DhcpLease? = null

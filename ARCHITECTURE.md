@@ -2,6 +2,39 @@
 
 Status: implementation selected; device acceptance remains a separate gate.
 
+## 2026-10-02 extension design (before implementation)
+
+The baseline is commit `a4b8fb8`, version 0.1.1. The unmodified debug APK
+builds with cached dependencies. Fresh host tests and its preserved APK are
+recorded in TEST_RESULTS.md and `dist/baseline/`. No device is attached.
+
+Keep the PACK/HTTP/authentication, virtual Ethernet, DHCP, TUN, Keystore and
+physical-network controller. Extend the existing stream transport interface:
+
+* Profile preferences default to one TCP connection, acceleration disabled,
+  TCP transport. Old DataStore entries retain their credentials and identity.
+* Initial login negotiates the connection limit. A session-owned pool attaches
+  protected TLS sockets with `additional_connect` and the existing session
+  key. Bounded per-socket writers schedule complete Ethernet records; readers
+  merge into the existing bounded input channel. Individual failures remove
+  sockets; a single replenishment job retries with backoff. Errors 13/14
+  invalidate the session. No extra DHCP or TUN exists.
+* Optional protected UDP acceleration is prepared before login. A separate
+  codec and session worker handle negotiation, authenticated packets,
+  endpoint learning, keepalive and upstream readiness. TCP stays available.
+* R-UDP/DNS supplies a bounded reliable byte stream over a protected IPv4
+  UDP socket directed to the configured server on port 53. TLS using
+  SSLEngine wraps that stream with the same certificate policy before the
+  unchanged native handshake. Bulk and UDP recovery are not advertised;
+  upstream consequently restricts this session to one connection.
+* Auto initially chooses TCP, preserving the reliable baseline. Explicit
+  UDP/53 never falls back to TCP. Network changes close the entire attempt
+  and rebuild sockets, keys, NAT mappings, DHCP and TUN as before.
+* Counters are sampled once per second; workers never publish UI per packet.
+  Every worker is a child of the attempt scope and every socket is owned
+  before setup can block. Queues and retransmission/reassembly windows are
+  bounded. Disconnect interrupts socket I/O and cancels workers.
+
 ## Evidence and alternatives
 
 The authoritative source is the supplied SoftEtherVPN_Stable checkout,
@@ -37,11 +70,13 @@ Cedar/Pack.c, Cedar/Packet.c and Cedar/IPC.c paths do not exist.
 ## Modules and ownership
 
 * core-protocol: bounded PACK, upstream-compatible SHA-0 authentication,
-  HTTP signature/login, welcome negotiation and TCP Ethernet framing.
+  HTTP signature/login, welcome negotiation, connection pool, UDP acceleration
+  and reliable UDP/DNS stream/packet codecs.
 * core-network: IPv4 validation, checksums, routes and UDP helpers.
 * core-l2: Ethernet II, ARP cache, virtual endpoint and bounded ARP waiting.
 * core-dhcp: DHCP packet codec and timed DISCOVER/OFFER/REQUEST/ACK exchange.
-* core-security: system trust plus explicit SHA-256 leaf certificate pins.
+* core-security: system trust plus explicit SHA-256 leaf certificate pins,
+  SSLEngine TLS over the reliable UDP stream.
 * app: Compose UI, DataStore profile, Keystore-encrypted password, physical
   Network tracking, foreground VpnService and TUN lifecycle.
 * integration: host runner sharing the production protocol/L2/DHCP modules,
@@ -53,8 +88,10 @@ Android TUN carries IP packets. SoftEther transports Ethernet frames, including
 ARP and DHCP. There is no direct substitution of TUN for TAP.
 
 Outbound: TUN IPv4 -> validate length/source/MTU -> longest-prefix next hop
--> ARP cache or bounded resolution queue -> Ethernet II -> native batch
-framing -> TLS -> stock hub. Inbound: TLS -> bounded native framing ->
+-> ARP cache or bounded resolution queue -> Ethernet II -> session scheduler.
+The scheduler selects authenticated UDP acceleration when ready, otherwise a
+pool writer sends the complete native record over TLS. TLS may use TCP or the
+explicit reliable UDP/DNS stream. Inbound: UDP acceleration or native framing ->
 Ethernet destination/type validation -> ARP/DHCP consumed internally, or
 validated IPv4 addressed to the leased endpoint -> TUN write.
 
@@ -95,8 +132,28 @@ Remote lengths are bounded before allocation. Log export contains only local
 phase names, numeric protocol error codes and counters. Passwords are never
 placed in intents, saved UI state, backups or diagnostics.
 
-Initial scope: one direct TCP/TLS channel, IPv4 full tunnel, password and
-anonymous authentication. Compression, RC4, UDP acceleration, redirects,
-IPv6 and multi-channel transport are explicitly deferred and rejected if
-unexpectedly negotiated. Production status requires the device acceptance
-matrix; a successful build alone cannot establish that status.
+The primary and all additional connections share one authentication/session,
+one L2/DHCP endpoint and one TUN. The pool uses bounded 16-frame writer queues,
+queue pressure and round-robin ties without per-packet sorting. A single
+manager creates additional connections; an independent watchdog closes stalled
+writes even during a secondary handshake. Resource publication/collection uses
+short state locks; socket closure and network setup occur outside those locks.
+
+UDP acceleration has one socket worker and an optional NAT discovery child.
+Its 128-frame queue falls back to the pool when unavailable/full. Authenticated
+newer peer ticks update the endpoint. Native keepalives exchange NAT ports.
+Readiness follows upstream's 10-second stable reception requirement and recent
+echo timeout; Active also requires successfully sent and received data bytes.
+
+R-UDP has one reliability/socket worker, 64-segment windows with 512-byte
+segments, 64 KiB send/receive FIFOs, and 128-segment stream queues. TLS has
+three fixed 64 KiB buffers and a 32 KiB output buffer, matching the baseline
+record flushing. Backpressure bounds memory rather than growing
+retransmission or reassembly queues. Socket closure interrupts the adapters;
+cancellation joins children through the existing attempt scope. Network changes
+recreate the entire attempt, including UDP keys, endpoints and NAT state.
+
+Compression, native fast RC4, redirects, IPv6, bulk R-UDP, UDP recovery,
+VPN Azure and NAT-T transport discovery remain unsupported. Legacy RC4 is
+used only where stock R-UDP and acceleration v1 require it. TLS always wraps
+R-UDP. Production status requires the device acceptance matrix.

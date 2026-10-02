@@ -1,5 +1,39 @@
 # Auditable SoftEther protocol notes
 
+## Extension audit and implementation plan, 2026-10-02
+
+Read the pinned local Stable source before extending the client: Protocol.c/h,
+Connection.c/h, Session.c/h, UdpAccel.c/h, Cedar.h and Mayaqua Network.c/h.
+MAX_TCP_CONNECTION is 32; directions are BOTH=0, SERVER_TO_CLIENT=1,
+CLIENT_TO_SERVER=2. ClientUploadAuth sends the requested `max_connection`;
+ClientConnect respects the server limit. ClientAdditionalConnect sends the
+signature, downloads Hello, calls ClientUploadAuth2/PackAdditionalConnect
+(`method=additional_connect`, 20-byte `session_key`, PackAddClientVersion),
+then checks error and direction. Errors 13/14 expire the logical session.
+ConnectionSend schedules whole blocks using eligible socket queue pressure.
+
+UDP acceleration uses the exact ClientUploadAuth/PackWelcome fields.
+UdpAccel.c v2 is a 12-byte IV, encrypted big-endian cookie/two ticks/uint16
+payload length/byte flag/payload/padding, then a 16-byte ChaCha20-Poly1305 tag.
+The 128-byte advertised directional key uses its first 32 bytes for AEAD.
+V1 uses SHA1(common-key || IV) and RC4 with a 20-byte zero trailer.
+UdpAccelIsSendReady requires a recent echoed local tick and 10 seconds of
+continuous reception; failure leaves the native reliable transport alive.
+
+Network.c RUDPNewSession derives keys with SHA1 and WriteBufStr (a uint32
+length including one, without a transmitted NUL), and seeds the stream with
+the disconnect magic. RUDPSendSegmentNow uses signature/20-byte IV/RC4 body,
+ticks, cumulative ACK, up to 64 selective ACKs, sequence, <=512 payload bytes
+and 1..255 padding bytes. The signature is SHA1(key || IV || ciphertext)
+XOR SHA1(lowercase service name `softether_vpn`). The send window is 64;
+retries start at 200ms and cap at 4792ms, with echoed-tick RTT adjustment.
+DNS queries use the upstream 37-byte wrapper; responses use the 42-byte
+wrapper. Transaction IDs are opaque bytes (C writes a native ushort), while
+payload lengths and protocol integers are big-endian. Direct DNS bypasses
+NewRUDPClientNatT discovery and targets the server IPv4 address on UDP/53.
+TLS still runs over the reconstructed stream. Without UDP recovery, server
+and client restrict R-UDP to one connection.
+
 Authoritative checkout: SoftEtherVPN/SoftEtherVPN_Stable,
 `ed17437af9719ac66acab30faa29e375d613c35f`, release 4.44 build 9807.
 Protocol.c SHA-256:
@@ -32,6 +66,13 @@ checkout PACK and packet code live in Mayaqua; IPC is called IPsec_IPC.
 |---|---|
 | SoftEtherTlsTransport.connect | Protocol.c ClientConnectToServer / ClientCheckServerCert; Android protect/bind is the platform addition |
 | SoftEtherSession.connect | Protocol.c ClientConnect / ClientDownloadHello / GetHello / ParseWelcomeFromPack / GetSessionKeyFromPack |
+| SoftEtherConnectionPool | Protocol.c ClientAdditionalConnect / ClientAdditionalConnectToServer; Connection.c ConnectionSend / ConnectionReceive |
+| SoftEtherSession.attachAdditional | Protocol.c ClientUploadAuth2 / PackAdditionalConnect / PackAddClientVersion / ServerAccept |
+| UdpAccelerationOffer | Protocol.c ClientUploadAuth / PackWelcome / ClientConnect; UdpAccel.c NewUdpAccel / UdpAccelInitClient |
+| UdpAccelerationCodec / Engine | UdpAccel.c UdpAccelSend / UdpAccelCalcKey / UdpAccelProcessRecvPacket / UdpAccelPoll / UdpAccelIsSendReady / UdpAccelCalcMss |
+| RudpKeys / PacketCodec / Session | Mayaqua/Network.c RUDPNewSession / RUDPSendSegmentNow / RUDPCheckSignOfRecvPacket / RUDPProcessRecvPacket / RUDPRecvProc / RUDPInterruptProc |
+| RudpDnsCodec / Transport | Network.c RUDP_PROTOCOL_DNS in RUDPSendPacket / RUDPMainThread; NewRUDPClientDirect / ConnectThreadForOverDnsOrIcmp |
+| TransportSelector / StreamTlsTransport | Direct UDP53 establishes a stream before the existing TLS and ClientConnect path; no NewRUDPClientNatT discovery |
 | Signature POST | Protocol.c ClientUploadSignature / ServerDownloadSignature; Mayaqua/Network.h HTTP_VPN_TARGET2 / HTTP_VPN_TARGET_POSTDATA |
 | SoftEtherHttp | Mayaqua/Network.c HttpClientSend / HttpClientRecv / PostHttp |
 | SoftEtherPackCodec | Mayaqua/Pack.c WritePack / WriteElement / WriteValue / ReadPack / ReadElement / ReadValue |
@@ -76,21 +117,43 @@ compatibility inside authenticated TLS. ASCII usernames are enforced;
 passwords use UTF-8. Plain-password and certificate authentication are not
 advertised. Anonymous authtype=0 is supported; password authtype=1.
 
-Negotiation requests protocol=0, max_connection=1, encryption=true,
+Negotiation requests protocol=0, max_connection=requested (1..32), encryption=true,
 compression=false, RC4=false, half_connection=false, qos=false,
-UDP acceleration=false and UDP recovery=false. Reject unexpected negotiation,
+UDP acceleration follows the profile offer and UDP recovery=false. Reject unexpected negotiation,
 including TLS-to-plaintext switching. Preserve the 20-byte session key and
 uint32 key in private session state; wipe on close. No debug toString exposes
-key material. Extra connection/session-key use is deferred.
+key material. Additional connections send only the existing session key and
+client version metadata, after TLS identity and native signature/hello checks.
+The negotiated count clamps the requested count; server errors 13/14 rebuild
+the session. A failed secondary is replaced with bounded backoff.
 
 Data: uint32 batch count, then per block uint32 length plus Ethernet bytes.
 Keepalive: `ffffffff`, uint32 length, up to 512 bytes. Empty block/batch and
 zero-length keepalive handling follows receive modes. Locally cap frames at
 1600 bytes, batch count at 4096, HTTP headers at 16 KiB and PACK at 1 MiB.
 These tighter client resource limits intentionally reject oversized responses.
-Keepalive interval is one-third of negotiated timeout; no UDP transport
-exists in the first milestone. Session shutdown closes TCP; the server's
-normal connection-loss path releases the session.
+Keepalive interval is one-third of negotiated timeout. UDP acceleration's
+native keepalive payload uses `NATT_MY_PORT` followed by big-endian uint16.
+Discovery uses the stock hashed NAT-T hostname and UDP5004 `B` request;
+it is separate from direct VPN-over-DNS, which contacts only the server IPv4.
+Session shutdown closes all owned underlays; the server's normal
+connection-loss/timeout path releases the session.
+
+Acceleration advertises encrypted v2 when the platform provider supplies
+ChaCha20-Poly1305 and otherwise v1. Android's provider documents v2 from
+API28; API26/27 can use the stock v1 codec. A server declining UDP or supplying
+incomplete/unsupported parameters leaves TCP working. Plaintext acceleration
+and compressed packet flags are rejected. Endpoint changes require valid
+packet crypto/cookie and a newer peer tick. Lost readiness falls back to TCP
+and keepalive probes continue for recovery.
+[Android cipher support](https://developer.android.com/reference/javax/crypto/Cipher).
+
+The explicit DNS transport requires server `EnableVpnOverDns=true`. It does
+not invoke DNS resolvers to carry protocol packets. Auto chooses TCP and
+does not race transports. Bulk/recovery are not advertised, so upstream forces
+one connection for R-UDP; the requested TCP count remains visible separately.
+DNS transaction IDs can refer to the latest query rather than one outstanding
+request; acceptance relies on signed R-UDP packets, not ID equality.
 
 ## MVPN and secondary references
 
@@ -117,8 +180,13 @@ was adapted.
 
 ## Regression procedure
 
-Regenerate C fixtures with tools/upstream_vectors.py after explicitly
+Regenerate C fixtures with tools/upstream_vectors.py and
+tools/transport_vectors.py after explicitly
 reviewing an upstream revision change. Run all tests, compare signature/login
 and native frames with the official desktop client, then run the host and
 device acceptance matrices. Do not change hashes, field names, byte order,
 negotiation defaults or framing solely to satisfy a guessed packet trace.
+The transport harness executes extracted C writers for v1/v2 acceleration,
+R-UDP signatures, key derivation and DNS query/response wrappers. Fixed random
+values are confined to the test harness. Its current Windows build uses clang
+and Git for Windows' local OpenSSL DLL; neither is an APK dependency.

@@ -7,6 +7,7 @@ import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
+import javax.net.ssl.SSLEngine
 import javax.net.ssl.X509TrustManager
 
 class TlsPolicy(pinHex: String? = null) {
@@ -16,8 +17,9 @@ class TlsPolicy(pinHex: String? = null) {
         ByteArray(32) { i -> clean.substring(i * 2, i * 2 + 2).toInt(16).toByte() }
     }
     val isPinned: Boolean get() = pin != null
-    fun socketFactory(): SSLSocketFactory {
-        if (pin == null) return SSLSocketFactory.getDefault() as SSLSocketFactory
+    fun socketFactory(): SSLSocketFactory = context().socketFactory
+    internal fun context(): SSLContext {
+        if (pin == null) return SSLContext.getDefault()
         val expected = pin.copyOf()
         val tm = object : X509TrustManager {
             override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
@@ -29,7 +31,13 @@ class TlsPolicy(pinHex: String? = null) {
                 if (!MessageDigest.isEqual(expected, actual)) throw CertificateException("Configured certificate pin does not match")
             }
         }
-        return SSLContext.getInstance("TLS").apply { init(null, arrayOf(tm), SecureRandom()) }.socketFactory
+        return SSLContext.getInstance("TLS").apply { init(null, arrayOf(tm), SecureRandom()) }
+    }
+    fun engine(host: String, port: Int): SSLEngine = context().createSSLEngine(host, port).apply {
+        useClientMode = true
+        enabledProtocols = supportedProtocols.filter { it == "TLSv1.2" || it == "TLSv1.3" }.toTypedArray()
+        require(enabledProtocols.isNotEmpty()) { "TLS 1.2 is required" }
+        sslParameters = sslParameters.apply { endpointIdentificationAlgorithm = if (pin == null) "HTTPS" else null }
     }
     fun configure(socket: SSLSocket) {
         val protocols = socket.supportedProtocols.filter { it == "TLSv1.2" || it == "TLSv1.3" }

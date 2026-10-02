@@ -30,10 +30,10 @@ $env:JAVA_HOME = 'C:\Program Files\Android\Android Studio\jbr'
 On macOS/Linux, configure a suitable JDK and SDK (`ANDROID_HOME` or
 `local.properties`), then use `./gradlew` with the same tasks. Debug output:
 `app/build/outputs/apk/debug/app-debug.apk`; packaged phone test artifact:
-`dist/SEVPN-0.1.1-debug.apk` plus `dist/SHA256SUMS.txt`.
+`dist/SEVPN-0.2.0-debug.apk` plus `dist/SHA256SUMS.txt`.
 
 ```powershell
-adb install -r .\dist\SEVPN-0.1.1-debug.apk
+adb install -r .\dist\SEVPN-0.2.0-debug.apk
 ```
 
 Without USB debugging, transfer the APK to your phone and allow installation
@@ -92,6 +92,37 @@ screenshots. Leaving password blank keeps a stored password only for the same
 server/port/hub/user identity. For a new profile, blank is an explicitly empty
 SoftEther password. Profile edits are disabled while a connection is active.
 
+## Advanced transport settings
+
+**Number of TCP Connections (1–32)** requests several protected TLS sockets
+within one SoftEther session. Default is 1. The server may allow fewer; the
+screen reports Requested, Server allowed and Active separately. Additional
+sockets use `additional_connect`, the existing session key and the same TLS
+identity. DHCP and Android TUN are created once. Secondary loss normally
+continues on the remaining sockets while the pool restores the allowed count.
+
+**UDP Acceleration** is optional encrypted packet delivery for a TCP session.
+Default is Off, which creates no acceleration socket or key offer. On requests
+stock v2 (ChaCha20-Poly1305), with stock v1 compatibility on older providers.
+The TCP session remains available if the server declines UDP, readiness is
+lost or a UDP operation fails. Active requires actual bidirectional data;
+negotiation alone is shown as Waiting. NAT traversal probes for acceleration
+are separate from VPN-over-DNS.
+
+**Transport** offers Auto, TCP and UDP 53 (R-UDP/DNS). Auto currently chooses
+the normal TCP path. Explicit TCP does not attempt UDP/53. Explicit UDP53
+uses SoftEther's reliable UDP stream and DNS-like binary envelope directly to
+the configured server's IPv4 address on UDP destination port 53, then performs
+the same certificate-validated TLS, native login and DHCP. The server must
+enable its VPN-over-DNS listener and allow UDP53. This mode never falls back
+to TCP and does not send tunnel packets to public/system DNS resolvers.
+Without bulk or UDP recovery support, stock SoftEther restricts it to one
+session connection; acceleration is not applicable in this mode.
+
+Existing saved profiles retain their identity/password and default to one
+TCP connection, acceleration Off and TCP. Physical network changes rebuild
+all sockets and UDP state through the existing reconnect controller.
+
 ## Tests
 
 `test` covers PACK, SHA-0/authentication, HTTP/native framing, unsafe negotiation,
@@ -105,9 +136,13 @@ To regenerate those fixtures, obtain the exact upstream source:
 ```sh
 git clone --branch v4.44-9807-rtm --depth 1 https://github.com/SoftEtherVPN/SoftEtherVPN_Stable.git
 python tools/upstream_vectors.py
+python tools/transport_vectors.py
 ```
 
-Requires Python 3 and clang/cc. Upstream source/research checkouts are ignored
+Requires Python 3 and clang/cc. The transport-vector harness currently uses
+Windows and Git for Windows' OpenSSL DLL to execute the pinned C functions.
+It adds independent v1/v2 UDP, R-UDP key/signature and DNS envelope vectors.
+Upstream source/research checkouts are ignored
 by this project's Git repository and are not bundled in the APK.
 
 Device-only tests use platform Instrumentation plus JUnit4:
@@ -120,7 +155,8 @@ These exercise actual Android Keystore encryption, random IVs, profile AAD
 and Android socket descriptor creation before VPN protection.
 They require a connected phone/emulator and have not been substituted with
 JVM Android mocks. [Integration instructions](integration/README.md) include
-a pinned, unmodified Stable Docker server and real IPv4 DNS/TCP probes.
+the executed signed Windows stock-server fixture, a Docker alternative and
+real IPv4 DNS/TCP probes for all three transports/features.
 
 ## Diagnostics and limits
 
@@ -130,13 +166,14 @@ OS/server errors and byte counters. It excludes raw exception text, passwords,
 hashes, keys and packet contents. The last failure stays visible during retries. Screenshots
 are intentionally blocked, so use diagnostic export when reporting a failure.
 
-Initial version: IPv4 full tunnel, one protected TCP/TLS connection, password
+Current version: IPv4 full tunnel, configurable protected TCP/TLS connections
+or explicit reliable UDP/DNS with TLS, optional UDP acceleration, password
 and anonymous authentication, DHCP and broadcast lease renewal, bounded ARP
 queues and reconnect backoff. DHCP subnet prefixes 1–30 and on-link gateways
 are supported. Explicit DNS override is optional; there is no silent public
 DNS fallback. IPv6 is blocked while TUN is active.
 
-Deferred: UDP acceleration, multi-channel optimization, compression, RC4,
+Deferred: compression, native fast RC4,
 cluster redirects, VPN Azure/NAT-T, certificate authentication, IPv6,
 split/per-app tunneling, static IP and always-on startup. No kill switch is
 implemented: traffic can use the physical network during initial connection

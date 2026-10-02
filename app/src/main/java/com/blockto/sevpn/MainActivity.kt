@@ -28,6 +28,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.blockto.sevpn.vpn.*
+import com.blockto.sevpn.protocol.TransportMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -99,6 +100,17 @@ private fun VpnScreen(connect: () -> Unit, disconnect: () -> Unit, exportLog: ()
             }
             if (status.phase == VpnPhase.CONNECTED) {
                 Text("Sent ${formatBytes(status.txBytes)} · Received ${formatBytes(status.rxBytes)} · ${elapsed / 60}m ${elapsed % 60}s")
+                val s = status.session
+                Text(if (s.transportType == com.blockto.sevpn.protocol.TransportType.TCP)
+                    "TCP connections: ${s.activeTcpConnections} · Server allowed: ${s.negotiatedMaxConnections} · Requested: ${s.requestedTcpConnections}"
+                    else "Transport: UDP 53 (R-UDP/DNS) · R-UDP connected")
+                Text("UDP Acceleration: " + when {
+                    s.transportType != com.blockto.sevpn.protocol.TransportType.TCP -> "Not applicable"
+                    !s.udpAccelerationRequested -> "Off"
+                    s.udpAccelerationActive -> "Active"
+                    s.udpAccelerationNegotiated -> "Waiting for UDP · TCP available"
+                    else -> "Unavailable · Using TCP"
+                })
             } else if (active) LinearProgressIndicator(Modifier.fillMaxWidth())
         } }
         if (!ready) { CircularProgressIndicator(); return@Column }
@@ -123,6 +135,17 @@ private fun VpnScreen(connect: () -> Unit, disconnect: () -> Unit, exportLog: ()
         }
         TextButton(onClick = { advanced = !advanced }) { Text(if (advanced) "Hide advanced settings" else "Advanced settings") }
         if (advanced) {
+            Text("Transport", style = MaterialTheme.typography.titleMedium)
+            TransportMode.entries.forEach { mode ->
+                Row(Modifier.fillMaxWidth()) {
+                    RadioButton(p.transportMode == mode, { model.update { it.copy(transportMode = mode) } }, enabled = enabled)
+                    Text(when (mode) { TransportMode.AUTO -> "Auto (TCP)"; TransportMode.TCP -> "TCP"; TransportMode.RUDP_DNS_53 -> "UDP 53 (R-UDP/DNS)" }, Modifier.padding(top = 12.dp))
+                }
+            }
+            Text("UDP 53 uses SoftEther R-UDP directly to your server; it requires its VPN-over-DNS listener.", style = MaterialTheme.typography.bodySmall)
+            Field("Number of TCP Connections (1–32)", p.requestedTcpConnections.toString(), enabled, KeyboardType.Number) { text -> model.update { it.copy(requestedTcpConnections = text.toIntOrNull() ?: 0) } }
+            Toggle("UDP Acceleration", p.udpAccelerationEnabled, enabled) { model.update { v -> v.copy(udpAccelerationEnabled = it) } }
+            Text("Acceleration is optional for TCP sessions and falls back to TCP when unavailable. It is separate from UDP 53 transport.", style = MaterialTheme.typography.bodySmall)
             Text("TLS trust", style = MaterialTheme.typography.titleMedium)
             Text(if (p.certificatePin.isBlank()) "System CA trust and hostname verification" else "Explicit SHA-256 certificate identity pin; supports private/self-signed servers")
             Field("SHA-256 leaf certificate fingerprint (optional)", p.certificatePin, enabled) { model.update { v -> v.copy(certificatePin = it.trim()) } }
@@ -132,7 +155,7 @@ private fun VpnScreen(connect: () -> Unit, disconnect: () -> Unit, exportLog: ()
             Text("Empty uses DNS from DHCP. No automatic public DNS fallback.", style = MaterialTheme.typography.bodySmall)
             Toggle("Reconnect after transport / network loss", p.reconnect, enabled) { model.update { v -> v.copy(reconnect = it) } }
             Toggle("Anonymous hub authentication", p.anonymous, enabled) { model.update { v -> v.copy(anonymous = it) } }
-            Text("Full IPv4 tunnel over TCP/TLS. IPv6 is blocked while connected. This version has no kill switch during reconnect and does not support UDP acceleration or cluster redirects.", style = MaterialTheme.typography.bodySmall)
+            Text("Full IPv4 tunnel with TLS certificate validation. IPv6 is blocked while connected. No kill switch during reconnect. Cluster redirects are unsupported.", style = MaterialTheme.typography.bodySmall)
         }
         TextButton(onClick = exportLog) { Text("Export sanitized diagnostics") }
         TextButton(onClick = { uiScope.launch { licenses = withContext(Dispatchers.IO) { context.assets.open("third_party_notices.md").bufferedReader().use { it.readText() } } } }) { Text("Open-source licenses") }
